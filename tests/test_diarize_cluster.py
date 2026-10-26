@@ -1,4 +1,4 @@
-"""说话人聚类后处理的单元测试（asr_engine.cluster_speakers，。不加载语音模型，几秒跑完。
+"""说话人聚类后处理的单元测试（asr_engine.cluster_speakers）。不加载语音模型，几秒跑完。
 
 覆盖：HDBSCAN 噪声块分给最近的人、不到 30 秒的小簇被并掉、合并阈值生效、指定人数时仍走 FunASR 原来的路径。
 

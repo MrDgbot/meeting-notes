@@ -83,6 +83,8 @@
 ```bash
 .venv/bin/python tests/test_live_resume.py      # 断网补发、半开连接、抢录、换人续录、等不到重连、服务重启（自己起临时服务）
 .venv/bin/python tests/test_lan_security.py     # 伪造 Host、跨站请求/WebSocket、登录限速、no-store、nmap、证书名称限制（OpenSSL 验证）
+.venv/bin/python tests/test_diarize_cluster.py  # 说话人聚类后处理：噪声块归属、小簇并入、合并阈值、指定人数不变（几秒）
+.venv/bin/python tests/test_cloud_asr_config.py # 云端识别没配置时不可用、不出现在选项里、不发请求
 node tests/audio/resampler.mjs                  # 浏览器端降采样：样本数、通带、抗混叠
 cd tests/mobile && npm install && npx playwright install chromium webkit
 MN_URL=http://127.0.0.1:8772 node sweep.mjs     # 320–1600px 每 10px × Chromium/WebKit：溢出、遮挡、点击区域、裁字、axe（WCAG 2.2 AA）

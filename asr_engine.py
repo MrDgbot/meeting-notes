@@ -20,7 +20,7 @@ import store
 # FunASR 谱聚类里的 k-means 没固定随机种子，同一段录音每次分出的人数/归属都可能不同；固定下来
 _cb.SpectralCluster.cluster_embs = lambda self, emb, k: _cb.k_means(emb, k, random_state=0, n_init=10)[1]
 
-# 不指定人数时的聚类后处理（选法和测试结果
+# 不指定人数时的聚类后处理
 SV_STEP = 0.75        # 声纹小块的步长（秒），sv_chunk 的默认值
 SPK_MIN_SEC = 30      # 总时长不到这么多秒的说话人，逐块并进最近的人
 SPK_MERGE_THR = 0.72  # 两个说话人声纹中心的余弦相似度超过它就合并（FunASR 默认 0.78）
