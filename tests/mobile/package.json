@@ -1,0 +1,13 @@
+{
+  "name": "meeting-notes-mobile-tests",
+  "private": true,
+  "description": "平板、手机布局扫描与可访问性检查（Playwright：Chromium + WebKit）",
+  "scripts": {
+    "sweep": "node sweep.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.50.0"
+  }
+}

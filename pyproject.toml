@@ -1,0 +1,23 @@
+[project]
+name = "meeting-notes"
+version = "0.1.0"
+description = "本地会议记录：实时转写 + 说话人分离 + AI 纪要"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "funasr>=1.4.16",
+    "modelscope",
+    "torch",
+    "torchaudio",
+    "soundfile",
+    "numpy",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "httpx",
+    "pypinyin",
+    "segno>=1.6.6",
+    "cryptography>=42",
+]
+
+[tool.uv]
+package = false

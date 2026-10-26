@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f5f5f5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="会议记录">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="/lan/icon.png">
+<link rel="icon" type="image/png" href="/lan/icon.png">
+<title>会议记录</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- 窄屏（平板竖屏、手机）：侧栏收成抽屉，顶上一条放菜单、名称、录音状态和新建 -->
+<header id="topbar">
+  <button class="ghost tb-btn" id="navBtn" aria-label="打开菜单" aria-controls="side" aria-expanded="false"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><i class="tb-dot"></i></button>
+  <a class="tb-brand" href="#/" id="tbHome"><span class="logo"><svg class="ic" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10.5v3"/></svg></span><b>会议记录</b></a>
+  <span class="grow"></span>
+  <a class="tb-rec" id="tbRec" hidden></a>
+  <button class="ghost tb-btn" id="tbNew" aria-label="新建会议"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+</header>
+<div id="scrim"></div>
+<aside id="side">
+  <a class="brand" id="homeLink" href="#/" title="回到首页"><span class="logo"><svg class="ic" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10.5v3"/></svg></span>
+    <span><b>会议记录</b><small>本机转写 · AI 纪要</small></span></a>
+  <button class="pri block" id="newBtn"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建会议</button>
+  <div id="ambCard"></div>
+  <div id="recPill" hidden></div>
+  <input id="searchMeetings" class="search" placeholder="搜索标题和内容">
+  <nav id="mlist"></nav>
+  <div class="side-foot">
+    <span id="asrBadge" class="badge">语音模型加载中…</span>
+    <button class="ghost sm" id="settingsBtn"><svg class="ic" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>设置</button>
+  </div>
+</aside>
+<main id="main"></main>
+<div id="modal" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
