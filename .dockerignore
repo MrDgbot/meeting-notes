@@ -1,0 +1,7 @@
+# 只需要代码：真实会议数据、虚拟环境、测试和文档都不进构建上下文
+*
+!pyproject.toml
+!uv.lock
+!*.py
+!static/
+!scripts/

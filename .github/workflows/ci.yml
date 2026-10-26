@@ -1,0 +1,102 @@
+# 在 Linux / Windows / macOS 上各跑一遍：单元测试 → 下载（或从缓存取）语音模型 → 集成测试 → 端到端转写一段普通话录音（macOS 除外）。
+# Linux 上另外用 PulseAudio 虚拟声卡测全天模式的采音（放录音进去，核对自动记录出来的文字）。
+name: CI
+on:
+  push:
+    branches: [main, platform]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"  # Windows 上中文输出不按 GBK / cp1252
+  MODELSCOPE_CACHE: ${{ github.workspace }}/.ms-cache
+  MN_TEST_LOAD_S: "900"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: ffmpeg、PulseAudio（Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg pulseaudio pulseaudio-utils
+      - name: ffmpeg（Windows）
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: ffmpeg（macOS）
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: 依赖（Linux 用 CPU 版 torch）
+        if: runner.os == 'Linux'
+        run: bash scripts/install-linux-cpu.sh
+      - name: 依赖
+        if: runner.os != 'Linux'
+        run: uv sync --frozen
+      - name: 单元测试（不加载语音模型）
+        run: |
+          set -e
+          uv run --no-sync python tests/test_platform.py
+          uv run --no-sync python tests/test_cloud_asr_config.py
+          uv run --no-sync python tests/test_diarize_cluster.py
+          uv run --no-sync python tests/test_split_level.py
+
+      - name: 取缓存的语音模型
+        id: models
+        uses: actions/cache/restore@v4
+        with:
+          path: .ms-cache
+          key: modelscope-v1
+          enableCrossOsArchive: true
+      - name: 下载 / 加载语音模型（Paraformer、VAD、标点、说话人、Fun-ASR-Nano）
+        run: |
+          MEETING_DATA="$RUNNER_TEMP/mn-load" uv run --no-sync python -c "
+          import time, asr_engine
+          t = time.time(); e = asr_engine.Engine(); e.load()
+          assert e.ready and e.nano is not None, (e.error, e.nano_error)
+          print('models ready on', asr_engine.DEVICE, round(time.time() - t), 's')"
+      - name: 存语音模型缓存
+        if: steps.models.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: .ms-cache
+          key: modelscope-v1
+          enableCrossOsArchive: true
+
+      - name: 集成测试（录音续接、局域网访问）
+        run: |
+          set -e
+          uv run --no-sync python tests/test_live_resume.py
+          uv run --no-sync python tests/test_lan_security.py
+      # macOS 只跑到这里：GitHub 的 macOS 虚拟机上 MPS 算出来的结果不对（实测 Nano 把示例录音认成“我爱你们”），真机上没问题
+      - name: 端到端：上传录音转写（paraformer、nano）
+        if: runner.os == 'Windows'
+        run: uv run --no-sync python tests/smoke_e2e.py
+      - name: 端到端：上传录音转写 + 全天模式从 PulseAudio 采音
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=mn
+          pactl set-default-source mn.monitor
+          uv run --no-sync python tests/smoke_e2e.py --ambient-play "paplay -d mn {wav}"
+      - name: 说话人分离子进程（pyannote）能导入、能跑
+        run: |
+          set -e
+          WAV=$(uv run --no-sync python -c "import sys; sys.path.insert(0, 'tests'); import smoke_e2e; print(smoke_e2e.find_sample())")
+          uv run --no-sync python diarize_worker.py "$WAV" "$RUNNER_TEMP/diar.json"
+          cat "$RUNNER_TEMP/diar.json"
+      - name: 说话人分离子进程断网也能跑、不发起任何网络连接
+        if: runner.os != 'macOS'
+        run: uv run --no-sync python tests/test_diarize_offline.py

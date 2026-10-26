@@ -28,7 +28,8 @@ import store
 import vocab
 from ambient import (SENS, Ambient, list_devices, purge_candidates, purge_old_audio, save_cfg as save_ambient_cfg,
                      sens_thres)
-from asr_engine import ASR_MODELS, DEVICE, Engine, asr_mode, duration_of, fmt_ts, make_mp3, pcm_to_wav, to_wav16k
+from asr_engine import (ASR_MODELS, DEVICE, DIARIZERS, Engine, asr_mode, diarizer_mode, duration_of, fmt_ts, make_mp3,
+                        pcm_to_wav, to_wav16k)
 from llm import LLMError, chat, chat_stream
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -66,7 +67,8 @@ def run_transcribe(mid: str):
             time.sleep(1)
         dur = duration_of(wav)
         store.update(mid, status="transcribing", duration=dur, error="", job_started=time.time(),
-                     job_estimate=max(5.0, dur / {"nano": 4, "hanbao": 10}.get(asr_mode(), 6) + (8 if asr_mode() == "hanbao" else 3)))
+                     job_estimate=max(5.0, dur / {"nano": 4, "hanbao": 10}.get(asr_mode(), 6) + (8 if asr_mode() == "hanbao" else 3)
+                                      + (dur * 0.08 + 20 if diarizer_mode() == "pyannote" else 0)))  # pyannote 实测约 0.06–0.09 倍时长 + 加载
         # wav 是从 mp3 解出来的就不要再压回去：mp3 有损，每次重新转写都重压一遍，几次后音质明显变差
         if not from_mp3 and (not mp3.exists() or mp3.stat().st_mtime < wav.stat().st_mtime):
             make_mp3(wav, mp3)
@@ -179,7 +181,8 @@ def reload_asr(request: Request):
 @app.get("/api/asr")
 def get_asr():
     return {"model": asr_mode(), "options": asr_options(), "nano_loaded": engine.nano is not None,
-            "nano_loading": engine.nano_loading, "nano_error": engine.nano_error}
+            "nano_loading": engine.nano_loading, "nano_error": engine.nano_error,
+            "diarizer": diarizer_mode(), "diarizers": DIARIZERS}
 
 
 def asr_options() -> dict:
@@ -190,6 +193,15 @@ def asr_options() -> dict:
 
 @app.put("/api/asr")
 def put_asr(body: dict = Body(...)):
+    """body：{"model": 识别模型} 和/或 {"diarizer": 说话人分离方式}。"""
+    if "diarizer" in body:
+        if body["diarizer"] not in DIARIZERS:
+            raise HTTPException(400, "未知的说话人分离方式")
+        s = store.get_settings()
+        s["asr"] = {**(s.get("asr") or {}), "diarizer": body["diarizer"]}
+        store.save_settings(s)
+        if "model" not in body:
+            return get_asr()
     m = body.get("model")
     if m not in asr_options():
         raise HTTPException(400, "未知的识别模型")
@@ -1081,6 +1093,10 @@ def _local_url() -> str:
 def _stop_local_llm():
     p = _llm["proc"]
     if p and p.poll() is None:
+        if not hasattr(os, "killpg"):  # Windows 没有进程组信号
+            p.kill()
+            _llm["proc"] = None
+            return
         try:
             os.killpg(p.pid, signal.SIGTERM)
             p.wait(timeout=10)

@@ -59,7 +59,7 @@ const S = { meetings: [], health: null, cur: null, tab: null, settings: null, fi
   split: localStorage.getItem("splitView") !== "0" };
 // 在别的设备（平板、手机）上通过局域网打开的
 const REMOTE = !["127.0.0.1", "localhost", "[::1]", "::1"].includes(location.hostname);
-const OFFLINE = REMOTE ? "连不上 Mac 上的会议记录服务（Mac 睡眠了、换了网络，或者服务没开）" : "连不上会议记录服务，请确认服务还在运行（./start.sh）";
+const OFFLINE = REMOTE ? "连不上电脑上的会议记录服务（电脑睡眠了、换了网络，或者服务没开）" : "连不上会议记录服务，请确认服务还在运行（./start.sh）";
 const TOUCH = matchMedia("(hover: none)").matches;
 // 在微信、飞书、钉钉、QQ、支付宝这类应用里扫码打开的：证书提示、录音、下载证书都可能不正常
 const IN_APP = (navigator.userAgent.match(/MicroMessenger|Lark|Feishu|DingTalk|AlipayClient|\bQQ\//) || [""])[0]
@@ -69,7 +69,7 @@ const CAN_SYS = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMe
 const CAN_MIC = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
 // ---------------- 通用 ----------------
-// 局域网设备的登录过期了（或者在 Mac 上点了“让所有设备退出”）：回登录页，登录后回到当前页面
+// 局域网设备的登录过期了（或者在电脑上点了“让所有设备退出”）：回登录页，登录后回到当前页面
 function needLogin(status, data) {
   if (status !== 401 || !data || !data.login) return false;
   location.href = data.login + "?next=" + encodeURIComponent("/" + location.hash);
@@ -558,7 +558,7 @@ function renderAmb() {
   let line = AMB_TXT[a.state] || a.state;
   if (a.state === "paused") line = a.paused_until === -1 ? "已暂停，麦克风已关闭" : `已暂停到 ${new Date(a.paused_until * 1000).toTimeString().slice(0, 5)}，麦克风已关闭`;
   if (a.state === "error") line = a.error.startsWith("语音模型") ? a.error + "（点左下角“重试”）" : "出错，自动重试中：" + a.error;
-  if (a.fallback && ["listening", "speech"].includes(a.state)) line += ` · ${a.fallback}未连接，暂用 Mac 麦克风`;
+  if (a.fallback && ["listening", "speech"].includes(a.state)) line += ` · ${a.fallback}未连接，暂用电脑麦克风`;
   box.className = "amb " + (on ? "on " + a.state : "off");
   box.innerHTML = `<div class="row" style="gap:8px"><span class="adot"></span><b class="grow">全天模式</b>
       <label class="switch" title="${on ? "关闭" : "开启"}全天模式"><input type="checkbox" id="ambSw" ${on ? "checked" : ""}><i></i></label></div>
@@ -606,10 +606,10 @@ async function toggleAmb(on) {
     const ok = await new Promise(res => {
       const dlg = modal(`<h2>开启全天模式</h2>
         <ul class="intro">
-          <li>后台直接用 Mac 麦克风持续监听，<b>不需要开着网页</b>；只有检测到有人说话才录音和转写，没人说话时不保存任何声音。</li>
+          <li>后台直接用电脑麦克风持续监听，<b>不需要开着网页</b>；只有检测到有人说话才录音和转写，没人说话时不保存任何声音。</li>
           <li>静音超过 ${a.cfg.split_min} 分钟自动结束一段对话，随后精准转写并区分说话人；发言不足 ${a.cfg.min_speech_s} 秒的片段直接丢弃（写过笔记、改过标题的会保留）。</li>
           <li>${a.cfg.summary_time ? `每天 ${a.cfg.summary_time} 自动生成当日汇总（需在设置里配好 AI 模型的 API Key）` : "可以在“当日汇总”页面一键生成当天的工作汇总"}。</li>
-          <li>没人说话时约占单核 3% CPU。开启期间 Mac 不会自动休眠（屏幕照常熄灭）；合上盖子用电池时 Mac 会休眠，记录随之暂停。</li>
+          <li>没人说话时约占单核 3% CPU。开启期间电脑不会自动休眠（屏幕照常熄灭）；合上盖子用电池时电脑会休眠，记录随之暂停。</li>
           <li>菜单栏会一直显示橙色麦克风图标。需要隐私时点“暂停”，麦克风会立即关闭。<b>请告知身边的人正在录音</b>，并遵守所在单位的规定。</li>
         </ul>
         <div class="row" style="justify-content:flex-end"><button id="aNo">取消</button><button class="pri" id="aYes">开启</button></div>`);
@@ -632,11 +632,11 @@ async function getSysAudio() {
   disp.getVideoTracks().forEach(t => t.stop());
   return disp;
 }
-// 录音链路（手机、平板上网络会断）：每块 100ms（3200 字节）按顺序发，没被 Mac 确认的块留在内存里；
-// 断线后带同一个录音编号重连，Mac 告诉这边已经存到哪，从那里补发。缓存上限 15 分钟，和 Mac 等重连的时间一致。
+// 录音链路（手机、平板上网络会断）：每块 100ms（3200 字节）按顺序发，没被电脑确认的块留在内存里；
+// 断线后带同一个录音编号重连，电脑告诉这边已经存到哪，从那里补发。缓存上限 15 分钟，和电脑等重连的时间一致。
 const CHUNK = 3200, BUF_MAX = 15 * 60 * 10;
 const GAP_TEXT = { hidden: "页面在后台或锁屏了", interrupted: "被系统打断（来电、Siri 或别的应用在用麦克风）", muted: "麦克风没有声音（可能被别的应用占用）",
-  overflow: "和 Mac 断开太久，超出了这台设备能暂存的 15 分钟", stall: "浏览器暂停了收音" };
+  overflow: "和电脑断开太久，超出了这台设备能暂存的 15 分钟", stall: "浏览器暂停了收音" };
 const wsUrl = path => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`;
 const newRecId = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/-/g, "").slice(0, 20);
 const REC = {
@@ -744,7 +744,7 @@ const REC = {
     if (!document.hidden) toast(`刚才有 ${Math.max(1, Math.round(ms / 1000))} 秒没录到：${GAP_TEXT[reason]}。转写稿里会标出这一段。`, 6000);
   },
   checkStall() {
-    // 连接“假活”（手机换了网络，旧连接成了黑洞，浏览器察觉不到）：8 秒没收到 Mac 的确认就主动断开重连
+    // 连接“假活”（手机换了网络，旧连接成了黑洞，浏览器察觉不到）：8 秒没收到电脑的确认就主动断开重连
     if (this.conn === "ok" && this.ws && this.ws.readyState === 1 && performance.now() - this.lastAck > 8000) {
       const ws = this.ws; this.ws = null;
       try { ws.close(); } catch {}
@@ -790,9 +790,9 @@ const REC = {
         else if (j.type === "status") toast(j.msg);
         else this.onMsg(j);
       };
-      // iPhone / iPad 没装好 Mac 的证书时，Safari 可能直接断开这个连接
+      // iPhone / iPad 没装好电脑的证书时，Safari 可能直接断开这个连接
       ws.onerror = () => { if (!ok) rej(new Error(REMOTE && /iP(hone|ad|od)|Macintosh/.test(navigator.userAgent) && "ontouchend" in document
-        ? "实时转写连接失败。iPhone / iPad 上要先安装并信任 Mac 的证书（Mac 上“设置 · 平板、手机访问”里有步骤）" : "连接服务失败")); };
+        ? "实时转写连接失败。iPhone / iPad 上要先安装并信任电脑的证书（电脑上“设置 · 平板、手机访问”里有步骤）" : "连接服务失败")); };
       ws.onclose = () => { if (!ok) rej(new Error("连接已关闭")); else this.onClose(ws); };
     });
   },
@@ -803,7 +803,7 @@ const REC = {
     const was = this.conn; this.conn = "ok"; this.retry = 0; this.lastAck = performance.now();
     this.flushCtl(); this.flush();
     if (this.stopping) this.sendStop();
-    if (!first && was !== "ok") { this.emit("conn"); toast(j.resumed ? "已重新连上 Mac，断开期间的录音已补传" : "已重新连上 Mac"); }
+    if (!first && was !== "ok") { this.emit("conn"); toast(j.resumed ? "已重新连上电脑，断开期间的录音已补传" : "已重新连上电脑"); }
   },
   onMsg(j) {
     if (j.type === "ack") { this.lastAck = performance.now(); this.ackTo(j.bytes); this.emit("ack"); return; }
@@ -832,9 +832,9 @@ const REC = {
     }, delay);
   },
   onStopped(j) {
-    // 正常结束；或者 Mac 那边已经结束了这次录音（断开超过 15 分钟 / 在别处点了结束）
+    // 正常结束；或者电脑那边已经结束了这次录音（断开超过 15 分钟 / 在别处点了结束）
     const lost = Math.max(0, this.startBytes + this.next * CHUNK - (j.file_bytes ?? this.startBytes + this.next * CHUNK));
-    if (j.already && lost >= CHUNK) toast(`Mac 那边已经结束了这次录音，最后 ${Math.round(lost / 32000)} 秒没能传上`, 8000);
+    if (j.already && lost >= CHUNK) toast(`电脑那边已经结束了这次录音，最后 ${Math.round(lost / 32000)} 秒没能传上`, 8000);
     const r = this.stopRes; this.stopRes = null;
     if (r) r({ lost });
     else { this.cleanup(); this.emit("closed"); }
@@ -881,7 +881,7 @@ const REC = {
   },
   pause() { this.paused = true; },
   resume() { this.paused = false; this.lastChunk = performance.now(); },
-  // 结束：先停收音，再把还没传上的传完，最后告诉 Mac 结束（断着就等重连）。giveUp() 可以不等了
+  // 结束：先停收音，再把还没传上的传完，最后告诉电脑结束（断着就等重连）。giveUp() 可以不等了
   async stop() {
     if (!this.active) return { lost: 0 };
     this.active = false; this.stopping = true;
@@ -902,7 +902,7 @@ const REC = {
     this.stopSentOn = ws;
     this.flushCtl();
     ws.send(JSON.stringify({ ...this.stat(), type: "stop" }));
-    // 回执丢了也不要一直等：已经全部发出去了，30 秒后按结束处理（重连时 Mac 会告诉我们结果）
+    // 回执丢了也不要一直等：已经全部发出去了，30 秒后按结束处理（重连时电脑会告诉我们结果）
     clearTimeout(this.stopT); this.stopT = setTimeout(() => this.stopRes && this.onStopped({}), 30000);
   },
   giveUp() { const r = this.stopRes; if (!r) return; this.stopRes = null; r({ lost: (this.next - this.base) * CHUNK, gaveUp: true }); },
@@ -1026,7 +1026,7 @@ function showHome() {
       prog(""); $("#upBtn") && ($("#upBtn").disabled = false);
       await loadMeetings(); location.hash = "#/m/" + j.id;
     };
-    x.onerror = () => fail(REMOTE ? "网络中断，或者 Mac 上的服务没有运行" : "网络中断或服务没有运行");
+    x.onerror = () => fail(REMOTE ? "网络中断，或者电脑上的服务没有运行" : "网络中断或服务没有运行");
     x.onabort = () => fail("已取消");
     x.send(fd);
   };
@@ -1176,7 +1176,7 @@ function recHealthHTML(m) {
   const h = recHealth(m); if (!h) return "";
   const why = [...new Set(h.gaps.map(g => GAP_TEXT[g.reason] || GAP_TEXT.stall))].join("；");
   const tip = [`网络断开后重连 ${h.reconnects} 次（断开期间的录音会补传）`, h.gaps.length ? `没录到 ${h.gaps.length} 段，共 ${fmtDur(h.gapMs / 1000)}：${why}` : "",
-    h.lostMs >= 1000 ? `另有约 ${fmtDur(h.lostMs / 1000)} 录到了但没传上 Mac` : ""].filter(Boolean).join("\n");
+    h.lostMs >= 1000 ? `另有约 ${fmtDur(h.lostMs / 1000)} 录到了但没传上电脑` : ""].filter(Boolean).join("\n");
   return h.gaps.length || h.lostMs >= 1000
     ? `<span class="rh bad" title="${esc(tip)}">${ic("clock")}录音有 ${h.gaps.length + (h.lostMs >= 1000 ? 1 : 0)} 处缺口，共 ${fmtDur((h.gapMs + h.lostMs) / 1000)}</span>`
     : `<span class="rh" title="${esc(tip)}">${ic("check")}录音完整${h.reconnects ? `（断网重连 ${h.reconnects} 次，已补传）` : ""}</span>`;
@@ -1308,9 +1308,9 @@ function renderRecording() {
   const showLost = () => {
     const k = REC.lost, st = REC.stall;
     let html = "";
-    if (REC.stopping) html = `<div class="banner info"><b class="grow">正在把剩下的录音传到 Mac…<span class="muted small" id="pendTx"> ${REC.conn === "ok" ? "" : "连接断开了，正在重连；"}${pendingText()}</span></b>
+    if (REC.stopping) html = `<div class="banner info"><b class="grow">正在把剩下的录音传到电脑…<span class="muted small" id="pendTx"> ${REC.conn === "ok" ? "" : "连接断开了，正在重连；"}${pendingText()}</span></b>
       <button class="sm" id="giveUpBtn">不等了，直接结束</button></div>`;
-    else if (REC.conn === "reconnecting") html = `<div class="banner warn"><b class="grow">和 Mac 的连接断开了，正在重连…<span class="muted small" id="pendTx"> 录音没有停，${pendingText()}（最多 15 分钟），连上后自动补传</span></b></div>`;
+    else if (REC.conn === "reconnecting") html = `<div class="banner warn"><b class="grow">和电脑的连接断开了，正在重连…<span class="muted small" id="pendTx"> 录音没有停，${pendingText()}（最多 15 分钟），连上后自动补传</span></b></div>`;
     if (!REC.stopping && st) html += `<div class="banner err"><b class="grow">现在录不到声音：${GAP_TEXT[st.reason] || GAP_TEXT.stall}</b><button class="sm" id="wakeBtn">继续录音</button></div>`;
     if (!REC.stopping && k) html += `<div class="banner err"><b class="grow">${k === "sys" ? "电脑声音已断开（停止了共享），现在只录到麦克风" : "麦克风断开了，现在什么都录不到"}</b>
       <button class="sm" id="reconBtn">重新连接${k === "sys" ? "电脑声音" : "麦克风"}</button></div>`;
@@ -1420,7 +1420,7 @@ function renderDetail(keepPlayer = false) {
   } else if (d.live_active) {
     const ls = d.live_state || {}, dev = ls.device ? `（${esc(ls.device)}）` : "";
     banner = ls.state === "reconnecting"
-      ? `<div class="banner warn"><span class="grow">录音的设备${dev}和 Mac 断开了，正在等它连回来接着录；${fmtDur(ls.grace_left)}内没连回来会自动结束并开始转写</span>
+      ? `<div class="banner warn"><span class="grow">录音的设备${dev}和电脑断开了，正在等它连回来接着录；${fmtDur(ls.grace_left)}内没连回来会自动结束并开始转写</span>
         <button class="sm" id="liveEnd">现在结束</button></div>`
       : `<div class="banner info"><span class="recdot"></span><span class="grow">这个会议正在另一个页面${dev}录音，录完后这里会自动更新</span><button class="sm" id="liveEnd">结束那边的录音</button></div>`;
     refreshMeeting(m.id, 3000);
@@ -1865,7 +1865,9 @@ async function openSettings() {
     ${asr ? `<div class="sec"><h2>语音识别</h2>
     <label class="f">识别模型（对之后的录音生效；已有记录可点“重新转写”）</label>
     <select id="asrModel" style="width:100%">${Object.entries(asr.options).map(([k, v]) => `<option value="${k}" ${k === asr.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
-    <div class="small row" id="asrSt" style="margin-top:6px;gap:8px"></div></div>` : ""}
+    <div class="small row" id="asrSt" style="margin-top:6px;gap:8px"></div>
+    ${asr.diarizers ? `<label class="f" style="margin-top:10px">区分说话人（对之后的转写生效）</label>
+    <select id="asrDiar" style="width:100%">${Object.entries(asr.diarizers).map(([k, v]) => `<option value="${k}" ${k === asr.diarizer ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>` : ""}</div>` : ""}
     <div class="sec"><h2>词库</h2>
     <p class="muted small">常用热词帮助识别（同事姓名、项目名、术语），所有录音都会用；只填真正常说的词，太多反而干扰。
       纠错规则把固定认错的写法替换成正确的（如“艾森 → ASIN”），对已有记录也立即生效，删掉即恢复原文；在转写稿里改字时也可以一键加入。</p>
@@ -1883,11 +1885,11 @@ async function openSettings() {
       <div><label class="f">单段对话最长（分钟，超出自动切开）</label><input id="aMax" type="number" min="10" max="240" value="${ac.max_conv_min ?? 120}"></div>
       <div><label class="f">每天自动生成汇总的时间（留空不自动）</label><input id="aSum" type="time" value="${esc(ac.summary_time || "")}"></div>
       <div><label class="f">自动记录的录音保留天数（0 = 永久；文字一直保留）</label><input id="aKeep" type="number" min="0" value="${ac.audio_keep_days ?? 30}"></div>
-      <div style="align-self:end"><label class="small"><input type="checkbox" id="aAwake" ${ac.keep_awake !== false ? "checked" : ""}> 开启期间阻止 Mac 空闲休眠（屏幕照常熄灭）</label></div>
+      <div style="align-self:end"><label class="small"><input type="checkbox" id="aAwake" ${ac.keep_awake !== false ? "checked" : ""}> 开启期间阻止电脑空闲休眠（屏幕照常熄灭）</label></div>
     </div></div>
     <div class="sec"><h2>平板、手机访问</h2>
-    <p class="muted small">打开后，和这台 Mac 连着同一个 Wi-Fi 的 iPad、手机可以用浏览器打开会议记录：查看、整理、生成纪要，也能用它们的麦克风录音。
-      只有输对访问口令的设备才能进来；在这台 Mac 上打开不需要口令。</p>
+    <p class="muted small">打开后，和这台电脑连着同一个 Wi-Fi 的 iPad、手机可以用浏览器打开会议记录：查看、整理、生成纪要，也能用它们的麦克风录音。
+      只有输对访问口令的设备才能进来；在这台电脑上打开不需要口令。</p>
     <div id="lanBox" class="small muted">检查中…</div></div>
     <div class="row" style="margin-top:22px"><span class="grow"></span><button onclick="closeModal()">取消</button><button class="pri" id="saveSet">保存</button></div>`);
   api("/api/ambient/devices").then(r => {
@@ -1937,7 +1939,7 @@ async function openSettings() {
     const box = $("#lanBox", dlg); if (!box || !st) return;
     lanLast = st; box.className = "";
     if (!st.local) {
-      box.innerHTML = `<p class="small" style="margin-top:0">你正在通过局域网访问这台 Mac。开关和访问口令只能在 Mac 上修改。</p><a class="btn" href="/lan/logout">退出登录</a>`;
+      box.innerHTML = `<p class="small" style="margin-top:0">你正在通过局域网访问这台电脑。开关和访问口令只能在电脑上修改。</p><a class="btn" href="/lan/logout">退出登录</a>`;
       return;
     }
     const sel = Math.min(S.lanSel || 0, Math.max(0, st.urls.length - 1));
@@ -1956,18 +1958,18 @@ async function openSettings() {
         <div class="lan-list">${st.urls.map((u, i) => `<a class="lan-url${i === sel ? " on" : ""}" data-i="${i}"><b>${esc(u.url)}</b><small>${esc(u.label)}</small></a>`).join("")}
           <span class="muted small">用手机相机扫二维码，或者在浏览器里输入地址；点地址可以复制</span></div></div>
         <details class="steps"><summary>第一次在手机、平板上打开</summary><ol>
-          <li>手机连上和这台 Mac 同一个 Wi-Fi，扫上面的二维码。</li>
-          <li>浏览器提示“不是私密连接 / 不安全”：这是 Mac 自己签发的证书。iPhone 点“显示详细信息 → 访问此网站”，安卓 Chrome 点“高级 → 继续前往”。</li>
+          <li>手机连上和这台电脑同一个 Wi-Fi，扫上面的二维码。</li>
+          <li>浏览器提示“不是私密连接 / 不安全”：这是电脑自己签发的证书。iPhone 点“显示详细信息 → 访问此网站”，安卓 Chrome 点“高级 → 继续前往”。</li>
           <li>输入访问口令登录，这台设备 30 天内不用再输。</li>
           <li><b>建议装上证书</b>（不装每次都有警告，部分 iOS 版本上录音会连不上）：在登录页点“下载证书”，按页面上的步骤安装并信任。证书指纹：<span class="fp">${esc(st.ca_sha256 || "")}</span></li>
-          ${st.firewall ? `<li>Mac 的防火墙开着：第一次有设备连进来时，Mac 可能弹窗问是否允许“python”接受传入连接，请点“允许”。</li>` : ""}
-          <li>Mac 睡眠时手机连不上；开着全天模式时 Mac 不会自动睡眠。</li></ol></details>
+          ${st.firewall ? `<li>电脑的防火墙开着：第一次有设备连进来时，电脑可能弹窗问是否允许“python”接受传入连接，请点“允许”。</li>` : ""}
+          <li>电脑睡眠时手机连不上；开着全天模式时电脑不会自动睡眠。</li></ol></details>
         <details class="steps"><summary>手机、平板打不开？按这个顺序查</summary><ol>
-          <li>手机是不是连着<b>同一个 Wi-Fi</b>：用 4G/5G、连着“访客网络”都连不上 Mac。</li>
-          <li>公司、酒店、商场的 Wi-Fi 常开着<b>客户端隔离</b>（同一个 Wi-Fi 里的设备互相看不见）：让 Mac 连手机热点，或者两边都装 Tailscale 后用 Tailscale 地址。</li>
+          <li>手机是不是连着<b>同一个 Wi-Fi</b>：用 4G/5G、连着“访客网络”都连不上电脑。</li>
+          <li>公司、酒店、商场的 Wi-Fi 常开着<b>客户端隔离</b>（同一个 Wi-Fi 里的设备互相看不见）：让电脑连手机热点，或者两边都装 Tailscale 后用 Tailscale 地址。</li>
           <li><b>用名字（.local）打不开</b>：部分安卓手机和路由器不支持，改用上面的 IP 地址。</li>
-          <li><b>用 IP 打不开</b>：Mac 换过网络或重连 Wi-Fi 后 IP 会变，收藏的旧地址就失效了，重新扫这里最新的二维码。</li>
-          <li>Mac 睡眠或合上盖子时连不上。${st.firewall ? "Mac 的防火墙开着：到“系统设置 → 网络 → 防火墙 → 选项”里允许 python 接受传入连接。" : ""}</li>
+          <li><b>用 IP 打不开</b>：电脑换过网络或重连 Wi-Fi 后 IP 会变，收藏的旧地址就失效了，重新扫这里最新的二维码。</li>
+          <li>电脑睡眠或合上盖子时连不上。${st.firewall ? "电脑的防火墙开着：到“系统设置 → 网络 → 防火墙 → 选项”里允许 python 接受传入连接。" : ""}</li>
           <li><b>用微信扫的码</b>：会在微信里打开，证书提示和录音都可能不正常，点右上角“…”选“在浏览器打开”。</li></ol></details>
         <div class="row" style="margin-top:10px"><button class="sm ghost danger" id="lanKick">让所有已登录的设备退出</button></div>` : ""}`;
     $("#lanOn", dlg).onchange = e => lanPut({ enabled: e.target.checked });
@@ -2048,7 +2050,11 @@ async function openSettings() {
     $$("input[name=active]", dlg).forEach(r => r.onchange = () => $$(".prov", dlg).forEach(el => el.classList.toggle("on", $("input[name=active]", el).checked)));
   };
   bind();
-  const saveAsr = async () => { const sel = $("#asrModel", dlg); if (sel && asr && sel.value !== asr.model) await api("/api/asr", { method: "PUT", body: { model: sel.value } }); };
+  const saveAsr = async () => {
+    const sel = $("#asrModel", dlg), dz = $("#asrDiar", dlg);
+    if (dz && asr && dz.value !== asr.diarizer) await api("/api/asr", { method: "PUT", body: { diarizer: dz.value } });
+    if (sel && asr && sel.value !== asr.model) await api("/api/asr", { method: "PUT", body: { model: sel.value } });
+  };
   $("#saveSet", dlg).onclick = async () => {
     if (!(await confirmPurge())) return;
     // 填了访问口令却没点它旁边的“保存”：一起存掉，免得白填

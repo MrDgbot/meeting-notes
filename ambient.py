@@ -1,4 +1,5 @@
-"""全天模式：后台直接从 Mac 麦克风持续采音，只在有人说话时录音与转写，按长静音把一天切成一段段对话。
+"""全天模式：后台直接从电脑麦克风持续采音，只在有人说话时录音与转写，按长静音把一天切成一段段对话。
+采音用 ffmpeg：macOS 用 avfoundation，Linux 用 PulseAudio / PipeWire（没有就用 ALSA），Windows 用 DirectShow。
 
 开销（M 系列 Mac 实测）：
 - 没人说话：只跑 ffmpeg 采音 + FSMN-VAD（CPU，每 0.3 秒一块）≈ 单核 3%
@@ -12,6 +13,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -27,14 +29,14 @@ log = logging.getLogger("ambient")
 
 DEFAULTS = {
     "enabled": False,
-    "device": "",  # avfoundation 音频设备名；空 = 系统默认输入
+    "device": "",  # 采音设备名（list_devices() 里的名字）；空 = 系统默认输入
     "hotword": "",  # 常用人名/术语，所有自动记录都会用
     "split_min": 5,  # 静音超过 N 分钟，结束当前对话
     "min_speech_s": 20,  # 有效发言不足 N 秒的对话直接丢弃（咳嗽、偶尔一句话）
     "max_conv_min": 120,  # 单段对话最长 N 分钟（按录音长度），超出自动切开
     "summary_time": "21:30",  # 每天自动生成当日汇总；空 = 不自动
     "audio_keep_days": 30,  # 自动记录的录音保留天数，0 = 永久；文字一直保留
-    "keep_awake": True,  # 开启期间阻止 Mac 空闲休眠（屏幕仍可关闭）
+    "keep_awake": True,  # 开启期间阻止电脑空闲休眠（屏幕仍可关闭）
     "sensitivity": "high",  # 收音灵敏度，见 SENS
     "paused_until": 0,  # 暂停到什么时候（时间戳）；-1 = 直到手动恢复。存下来，重启服务后仍保持暂停
 }
@@ -66,11 +68,18 @@ def save_cfg(cfg: dict) -> dict:
     return s["ambient"]
 
 
-def list_devices() -> list[str]:
-    p = subprocess.run(["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-                       capture_output=True, text=True)
+# ---------- 采音设备（按系统） ----------
+def _ffmpeg(*args: str) -> subprocess.CompletedProcess | None:
+    try:  # Windows 上设备名可能是中文：ffmpeg 输出 UTF-8，不按系统编码（GBK）解
+        return subprocess.run(["ffmpeg", "-hide_banner", *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=15)
+    except (OSError, subprocess.SubprocessError):  # 没装 ffmpeg
+        return None
+
+
+def parse_avfoundation(stderr: str) -> list[str]:
     out, on = [], False
-    for line in p.stderr.splitlines():
+    for line in stderr.splitlines():
         if "audio devices" in line:
             on = True
             continue
@@ -78,6 +87,68 @@ def list_devices() -> list[str]:
         if on and m:
             out.append(m.group(2).strip())
     return out
+
+
+def parse_dshow(stderr: str) -> list[str]:
+    """ffmpeg -list_devices true -f dshow 的输出。新版每行带 (audio)/(video)，旧版分“DirectShow audio devices”一节。"""
+    out, sec = [], ""
+    for line in stderr.splitlines():
+        if "DirectShow audio devices" in line:
+            sec = "audio"
+        elif "DirectShow video devices" in line:
+            sec = "video"
+        m = re.search(r'\]\s+"(.+)"(?:\s+\(([^)]*)\))?\s*$', line)  # “Alternative name "@device…"”那行不匹配
+        if m and ("audio" in m.group(2) if m.group(2) else sec == "audio"):
+            out.append(m.group(1))
+    return out
+
+
+def parse_sources(stdout: str) -> list[str] | None:
+    """ffmpeg -sources pulse|alsa 的输出，每行“[*] 名字 [说明]”。连不上音频服务时返回 None。"""
+    if "Cannot list sources" in stdout or "Auto-detected sources" not in stdout:
+        return None
+    return [m.group(1) for line in stdout.splitlines() if (m := re.match(r"^\s*\*?\s*(\S+)\s+\[", line))]
+
+
+def _linux_backend() -> tuple[str, list[str]]:
+    """有 PulseAudio / PipeWire（pipewire-pulse）就用 pulse，否则用 ALSA。返回 (ffmpeg 输入格式, 设备列表)。"""
+    p = _ffmpeg("-sources", "pulse")
+    devs = parse_sources(p.stdout + p.stderr) if p else None
+    if devs is not None:
+        return "pulse", devs
+    p = _ffmpeg("-sources", "alsa")
+    devs = parse_sources(p.stdout + p.stderr) if p else None
+    return "alsa", [d for d in devs or [] if d not in ALSA_PLUGINS]
+
+
+# ALSA 列出来的这些是重采样、混音之类的插件，不是录音设备（null 是丢弃 / 静音设备）
+ALSA_PLUGINS = {"null", "lavrate", "samplerate", "speexrate", "speex", "upmix", "vdownmix", "jack", "oss", "pulse"}
+
+
+def list_devices() -> list[str]:
+    if sys.platform == "darwin":
+        p = _ffmpeg("-f", "avfoundation", "-list_devices", "true", "-i", "")
+        return parse_avfoundation(p.stderr) if p else []
+    if sys.platform == "win32":
+        p = _ffmpeg("-list_devices", "true", "-f", "dshow", "-i", "dummy")
+        return parse_dshow(p.stderr) if p else []
+    return _linux_backend()[1]
+
+
+def input_args(dev: str) -> list[str]:
+    """ffmpeg 采音的输入参数。dev 是 list_devices() 里的名字，空 = 系统默认输入。"""
+    if sys.platform == "darwin":
+        return ["-f", "avfoundation", "-i", f":{dev or 'default'}"]
+    if sys.platform == "win32":
+        if not dev:  # DirectShow 没有“默认设备”这个名字：用列表里第一个音频输入
+            devs = list_devices()
+            if not devs:
+                raise RuntimeError("没有找到麦克风（DirectShow 里没有音频输入设备）")
+            dev = devs[0]
+        # 缓冲默认 500ms，改小一点，开口后更快判断出有人说话
+        return ["-f", "dshow", "-audio_buffer_size", "50", "-i", f"audio={dev}"]
+    fmt = _linux_backend()[0]
+    return ["-f", fmt, "-i", dev or "default"]
 
 
 def iso(ts: float) -> str:
@@ -282,18 +353,19 @@ class Ambient:
 
     def _capture(self):
         want = self.cfg.get("device") or ""
-        dev = want or "default"
+        dev = want
         self.fallback = ""
         if want and not os.environ.get("AMBIENT_TEST_FILE") and want not in list_devices():
             # iPhone 等外接麦克风断开：先用系统默认麦克风继续录，设备回来后自动切回
             log.info("ambient: device %r not available, using default input", want)
-            dev, self.fallback = "default", want
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "avfoundation", "-i", f":{dev}",
-               "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
+            dev, self.fallback = "", want
         if os.environ.get("AMBIENT_TEST_FILE"):  # 测试用：用音频文件代替麦克风，可加速播放
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                    "-readrate", os.environ.get("AMBIENT_TEST_READRATE", "1"), "-readrate_initial_burst", "0",
                    "-i", os.environ["AMBIENT_TEST_FILE"],
+                   "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
+        else:
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", *input_args(dev),
                    "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.proc = proc
@@ -521,8 +593,7 @@ class Ambient:
 
     def _awake(self, on: bool):
         if on and self.cfg.get("keep_awake", True) and not self.caff:
-            # -i 阻止空闲休眠，-s 接电源时阻止系统休眠；屏幕照常熄灭。随本进程退出自动结束。
-            self.caff = subprocess.Popen(["caffeinate", "-i", "-s", "-w", str(os.getpid())])
+            self.caff = keep_awake()
         elif not on and self.caff:
             self.caff.terminate()
             self.caff = None
@@ -534,6 +605,42 @@ class Ambient:
             self.thread.join(timeout=5)
         self._close_conv()
         self._awake(False)
+
+
+class _WinAwake:
+    """Windows：SetThreadExecutionState 只对调用它的线程有效，单开一个线程一直占着，terminate() 时放开。"""
+
+    def __init__(self):
+        self._stop = threading.Event()
+        threading.Thread(target=self._run, daemon=True, name="keep-awake").start()
+
+    def _run(self):
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED：阻止睡眠，屏幕照常熄灭
+        self._stop.wait()
+        k.SetThreadExecutionState(0x80000000)
+
+    def terminate(self):
+        self._stop.set()
+
+
+def keep_awake():
+    """阻止电脑空闲休眠（屏幕照常熄灭），返回带 terminate() 的对象；这个系统上做不到就返回 None。"""
+    pid = str(os.getpid())
+    if sys.platform == "win32":
+        return _WinAwake()
+    if sys.platform == "darwin":
+        # -i 阻止空闲休眠，-s 接电源时阻止系统休眠；屏幕照常熄灭。随本进程退出自动结束。
+        cmd = ["caffeinate", "-i", "-s", "-w", pid]
+    else:  # Linux（systemd）：tail --pid 等本进程退出，抑制随之解除
+        cmd = ["systemd-inhibit", "--what=idle:sleep", "--who=会议记录", "--why=全天模式正在记录", "--mode=block",
+               "tail", f"--pid={pid}", "-f", "/dev/null"]
+    try:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:  # 没有 systemd（容器里）等：不阻止休眠，照常记录
+        log.info("keep awake not available: %s", cmd[0])
+        return None
 
 
 def has_user_content(mid: str) -> bool:

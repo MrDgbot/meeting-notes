@@ -3,7 +3,7 @@
 - 另开一个 HTTPS 端口（默认 8771）对局域网开放；原来的 127.0.0.1:8770 不变，本机访问不需要口令。
 - 不是从本机来的请求都要先用访问口令登录（Cookie，30 天）；口令只存 PBKDF2 哈希。改口令、
   “让所有设备退出”后旧的登录全部失效；连续输错会锁一段时间。
-- 证书：第一次开启时在 data/lan/ 生成这台 Mac 专用的根证书（5 年）和服务器证书（800 天，含本机局域网 IP 和 xxx.local）。
+- 证书：第一次开启时在 data/lan/ 生成这台电脑专用的根证书（5 年）和服务器证书（800 天，含本机局域网 IP 和 xxx.local）。
   根证书带“名称限制”（Name Constraints）：只能给私网 IP（10/8、172.16/12、192.168/16、Tailscale 100.64/10）
   和 .local / .ts.net 签证书。手机信任它以后，就算 data/lan/ca.key 被人拿走，也冒充不了任何公网网站。
   IP 变了自动重签服务器证书，根证书不变、不用重装。
@@ -25,6 +25,7 @@ import re
 import secrets
 import socket
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -134,7 +135,13 @@ def is_local(scope) -> bool:
         return False
     if ip.version == 6 and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
-    return ip.is_loopback
+    return ip.is_loopback or any(ip in n for n in LOCAL_CLIENTS)
+
+
+# 当作本机的来源地址（默认没有）。Docker 端口映射进来的请求，来源是网桥网关（如 172.17.0.1），不是 127.0.0.1：
+# 只把端口映射到宿主机的 127.0.0.1（docker run -p 127.0.0.1:8770:8770）时，才可以把网关地址加进来
+LOCAL_CLIENTS = [ipaddress.ip_network(n.strip(), strict=False)
+                 for n in (os.environ.get("MN_LOCAL_CLIENTS") or "").split(",") if n.strip()]
 
 
 _hosts = [0.0, set()]  # [上次刷新时间, 允许的 Host]
@@ -142,7 +149,8 @@ EXTRA_HOSTS = {h.strip().lower() for h in (os.environ.get("MN_ALLOWED_HOSTS") or
 
 
 def _tailscale_names() -> set[str]:
-    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"):
+    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+                os.path.join(os.environ.get("ProgramFiles") or r"C:\Program Files", "Tailscale", "tailscale.exe")):
         try:
             out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=2, check=False).stdout
             name = (json.loads(out).get("Self") or {}).get("DNSName", "").rstrip(".").lower()
@@ -226,7 +234,7 @@ class Guard:
             return await self.app(scope, receive, send)
         if not host_ok(scope):
             log.warning("rejected Host %r for %s", _header(scope, b"host"), scope["path"])
-            return await self._deny(scope, receive, send, 421, "这个地址不能用来打开会议记录（Host 不是这台 Mac 的地址）")
+            return await self._deny(scope, receive, send, 421, "这个地址不能用来打开会议记录（Host 不是这台电脑的地址）")
         if not origin_ok(scope):
             log.warning("rejected Origin %r for %s %s", _header(scope, b"origin"), scope.get("method", "WS"), scope["path"])
             return await self._deny(scope, receive, send, 403, "跨站请求被拒绝")
@@ -271,27 +279,56 @@ def hostname() -> str:
 def addresses() -> list[dict]:
     """本机的 IPv4 地址。Wi-Fi / 有线（有广播地址的网卡）排前面，其次 Tailscale（100.64/10）；
     代理软件的虚拟网卡（198.18/15 之类）手机连不上，只放进证书、不列出来。"""
+    res = []
+    for iface, addr, bcast in _ifaces():
+        ip = ipaddress.ip_address(addr)
+        if ip.is_loopback or ip.is_link_local:
+            continue
+        kind = ("lan" if bcast and not iface.startswith(VIRTUAL_IFACES) and ip.is_private
+                else "tailscale" if ip in ipaddress.ip_network("100.64.0.0/10") else "other")
+        res.append({"ip": str(ip), "iface": iface, "kind": kind})
+    order = {"lan": 0, "tailscale": 1, "other": 2}
+    return sorted(res, key=lambda a: (order[a["kind"]], not a["iface"].startswith(("en", "eth", "wl")), a["iface"]))
+
+
+# 手机连不上的虚拟网卡：macOS 的 utun，Linux 上 Docker / 虚拟机的网桥
+VIRTUAL_IFACES = ("utun", "lo", "docker", "br-", "veth", "virbr", "cni", "flannel", "tailscale")
+
+
+def _ifaces() -> list[tuple[str, str, bool]]:
+    """[(网卡名, IPv4, 有没有广播地址)]。macOS 用 ifconfig，Linux 用 ip（新系统多半没装 ifconfig），
+    Windows 用本机名解析出的地址（不知道网卡名，私网地址都当 Wi-Fi / 有线）。"""
+    if sys.platform == "win32":
+        try:
+            ips = {ai[4][0] for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
+        except OSError:
+            return []
+        return [("", ip, True) for ip in sorted(ips)]
+    res, iface = [], ""
+    try:
+        out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=3,
+                             check=False).stdout if sys.platform == "linux" else ""
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if out:  # 2: eth0    inet 192.168.1.5/24 brd 192.168.1.255 scope global eth0 …
+        for line in out.splitlines():
+            m = re.match(r"^\d+:\s+(\S+)\s+inet (\d+\.\d+\.\d+\.\d+)", line)
+            if m:
+                res.append((m.group(1), m.group(2), " brd " in line))
+        return res
     try:
         out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    res, iface = [], ""
     for line in out.splitlines():
         m = re.match(r"^(\S+): flags", line)
         if m:
             iface = m.group(1)
             continue
         m = re.match(r"\s+inet (\d+\.\d+\.\d+\.\d+)", line)
-        if not m:
-            continue
-        ip = ipaddress.ip_address(m.group(1))
-        if ip.is_loopback or ip.is_link_local:
-            continue
-        kind = ("lan" if "broadcast" in line and not iface.startswith(("utun", "lo")) and ip.is_private
-                else "tailscale" if ip in ipaddress.ip_network("100.64.0.0/10") else "other")
-        res.append({"ip": str(ip), "iface": iface, "kind": kind})
-    order = {"lan": 0, "tailscale": 1, "other": 2}
-    return sorted(res, key=lambda a: (order[a["kind"]], not a["iface"].startswith("en"), a["iface"]))
+        if m:
+            res.append((iface, m.group(1), "broadcast" in line))
+    return res
 
 
 def _x509():
@@ -336,7 +373,8 @@ def _load_ca():
             _save(ca_replaced=int(time.time()))
     DIR.mkdir(parents=True, exist_ok=True)
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"会议记录 本机根证书（{hostname().removesuffix('.local')}）"),
+    # CN 最长 64 字节（中文一个字 3 字节）：主机名很长时（如 CI 的虚拟机）截短，只是显示用
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"会议记录 本机根证书（{hostname().removesuffix('.local')[:28]}）"),
                       x509.NameAttribute(NameOID.ORGANIZATION_NAME, "meeting-notes")])
     now = datetime.now(UTC)
     ku = x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False, data_encipherment=False,
@@ -382,7 +420,9 @@ def ensure_certs() -> bool:
     ku = x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=True, data_encipherment=False,
                        key_agreement=False, key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False)
     san = [x509.DNSName(d) for d in sorted(dns)] + [x509.IPAddress(ipaddress.ip_address(i)) for i in sorted(ips)]
-    cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))
+    # 主机名超过 CN 的 64 字节上限时不放进 CN（截短的主机名会被 OpenSSL 拿去和名称限制比）；证书靠 SAN 认名字
+    cn = host if len(host.encode()) <= 64 else "会议记录 服务器证书"
+    cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
             .issuer_name(ca.subject).public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=800))  # 苹果要求不超过 825 天
             .add_extension(x509.SubjectAlternativeName(san), critical=False)
@@ -428,6 +468,31 @@ def _listening(port: int) -> bool:
     return False
 
 
+def _bind(port: int) -> socket.socket:
+    """监听 [::]:port，同时收 IPv4（xxx.local 可能先解析出 IPv6）；没有 IPv6 的机器（如关了 IPv6 的容器）退回 0.0.0.0。"""
+    for fam, addr in ((socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")):
+        sock = None
+        try:
+            sock = socket.socket(fam, socket.SOCK_STREAM)
+            if sys.platform == "win32":  # Windows 的 SO_REUSEADDR 能抢别的程序正在监听的端口，改用独占
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if fam == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind((addr, port))
+            sock.listen(128)
+            sock.setblocking(False)
+            return sock
+        except OSError as e:
+            if sock:
+                sock.close()
+            if fam == socket.AF_INET6 and e.errno in (errno.EAFNOSUPPORT, errno.EADDRNOTAVAIL):
+                continue
+            raise
+    raise OSError(errno.EAFNOSUPPORT, "没有可用的网络")
+
+
 class _Server(uvicorn.Server):
     @contextlib.contextmanager
     def capture_signals(self):  # 信号交给主服务处理：Ctrl+C 时主服务关闭、顺带关掉这里
@@ -471,16 +536,11 @@ class LanServer:
             if await asyncio.to_thread(_listening, port):
                 self.error = f"端口 {port} 已被别的程序占用，换一个端口再试"
                 return
-            sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
             try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)  # 同时收 IPv4（xxx.local 可能先解析出 IPv6）
-                sock.bind(("::", port))
-                sock.listen(128)
-                sock.setblocking(False)
+                sock = _bind(port)
             except OSError as e:
-                sock.close()
-                self.error = (f"端口 {port} 已被别的程序占用，换一个端口再试" if e.errno == errno.EADDRINUSE else f"无法监听端口 {port}：{e}")
+                self.error = (f"端口 {port} 已被别的程序占用，换一个端口再试"
+                              if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1)) else f"无法监听端口 {port}：{e}")
                 return
             config = uvicorn.Config(self.app, lifespan="off", log_config=None, proxy_headers=False, log_level="warning",
                                     ssl_certfile=str(SRV_PEM), ssl_keyfile=str(SRV_KEY), timeout_graceful_shutdown=3)
@@ -551,7 +611,7 @@ def _client_local(request: Request) -> bool:
 
 def _only_here(request: Request) -> None:
     if not _client_local(request):
-        raise HTTPException(403, "局域网访问的设置只能在这台 Mac 上修改")
+        raise HTTPException(403, "局域网访问的设置只能在这台电脑上修改")
 
 
 def status(request: Request | None = None) -> dict:
@@ -563,7 +623,7 @@ def status(request: Request | None = None) -> dict:
             if a["kind"] == "other":
                 continue
             urls.append({"url": f"https://{a['ip']}:{port}", "label": "Wi-Fi / 有线" if a["kind"] == "lan" else "Tailscale"})
-        urls.append({"url": f"https://{hostname()}:{port}", "label": "用名字访问（iPhone、iPad、Mac 可用，IP 变了也不用换）"})
+        urls.append({"url": f"https://{hostname()}:{port}", "label": "用名字访问（iPhone、iPad、电脑可用，IP 变了也不用换）"})
         import segno
         for u in urls:
             u["qr"] = segno.make(u["url"], error="m").svg_inline(scale=1, border=2, dark="#171717", omitsize=True)
@@ -611,7 +671,7 @@ def lan_logout_all(request: Request):
 def ca_cert():
     ca = ca_info()
     if not ca:
-        raise HTTPException(404, "还没有生成证书：先在 Mac 上的“设置 · 平板、手机访问”里开启")
+        raise HTTPException(404, "还没有生成证书：先在电脑上的“设置 · 平板、手机访问”里开启")
     return Response(ca["der"], media_type="application/x-x509-ca-cert",
                     headers={"Content-Disposition": 'attachment; filename="meeting-notes-ca.cer"'})
 
@@ -681,16 +741,16 @@ code{{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;word-break:break
 </style></head><body><form class="card" method="post" action="/lan/login">
 <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 10.5v3"/></svg></span><h1>会议记录</h1></div>
 <div class="inapp" id="inapp"></div>
-<p>这是 Mac 上的会议记录服务。输入在 Mac 上“设置 · 平板、手机访问”里设好的访问口令。</p>
+<p>这是电脑上的会议记录服务。输入在电脑上“设置 · 平板、手机访问”里设好的访问口令。</p>
 <input type="password" name="password" placeholder="访问口令" autocomplete="current-password" autofocus required>
 <input type="hidden" name="next" value="{escape(nxt)}"><button>登录</button>
 <div class="err">{escape(err)}</div><div class="small">登录后这台设备 30 天内不用再输。</div>
 <details><summary>浏览器提示“不安全”，或者 iPhone / iPad 上录不了音？</summary>
-<p style="margin-top:8px">这是 Mac 自己签发的证书。装上并信任它以后浏览器不再提示。<b>建议在 iPhone / iPad 上装好</b>：不装的话每次都会提示“不安全”，部分 iOS 版本上录音（实时转写连接）会连不上。</p>
+<p style="margin-top:8px">这是电脑自己签发的证书。装上并信任它以后浏览器不再提示。<b>建议在 iPhone / iPad 上装好</b>：不装的话每次都会提示“不安全”，部分 iOS 版本上录音（实时转写连接）会连不上。</p>
 {'<a class="btn" href="/lan/ca.cer">下载证书</a>' if ca else '<span class="small">（还没有生成证书）</span>'}
 <ol><li><b>iPhone / iPad</b>：用 Safari 点“下载证书”并允许下载，到“设置 → 已下载的描述文件”安装；再到“设置 → 通用 → 关于本机 → 证书信任设置”，打开“会议记录 本机根证书”的开关。</li>
 <li><b>安卓</b>：点“下载证书”，到“设置 → 安全 → 加密与凭据 → 安装证书 → CA 证书”选择刚下载的文件（不同品牌的菜单名称略有不同）。</li></ol>
-{f'<div class="small">证书指纹（可以和 Mac 设置页里显示的对一下）：<br><code>{fp}</code></div>' if ca else ''}
+{f'<div class="small">证书指纹（可以和电脑设置页里显示的对一下）：<br><code>{fp}</code></div>' if ca else ''}
 </details></form>
 <script>/* 网址里 # 后面的部分（要打开的那场会议）服务器看不到：带到表单地址上，输错一次、登录跳转后都还在 */
 document.forms[0].action = "/lan/login" + location.hash;

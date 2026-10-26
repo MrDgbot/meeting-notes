@@ -8,10 +8,12 @@ import http.client
 import json
 import os
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
@@ -52,9 +54,20 @@ async def ws_try(url, origin=None, cookie=None, tls=False):
         return "rejected:" + type(e).__name__
 
 
-def lan_ip():
-    out = subprocess.run(["ipconfig", "getifaddr", "en0"], capture_output=True, text=True).stdout.strip()
+def lan_ip(data):
+    """本机的 Wi-Fi / 有线 IP：用服务自己找地址的办法（lan.addresses），各系统通用。"""
+    code = "import lan; print(next((a['ip'] for a in lan.addresses() if a['kind'] == 'lan'), ''))"
+    out = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parent.parent, capture_output=True,
+                         text=True, env={**os.environ, "MEETING_DATA": str(data)}).stdout.strip()
     return out or None
+
+
+def _connects(host, port) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
 
 
 def make_leaf(ca_key, ca, dns=(), ips=()):
@@ -79,7 +92,7 @@ async def main():
     (tmp / "meetings").mkdir()
     srv = Server(tmp)
     lan_port = free_port()
-    ip = lan_ip()
+    ip = lan_ip(tmp)
     try:
         srv.start()
         P = srv.port
@@ -87,7 +100,12 @@ async def main():
         st, _, b = req("127.0.0.1", P, "PUT", "/api/lan", {**L, "Content-Type": "application/json"},
                        json.dumps({"enabled": True, "password": PW, "port": lan_port}))
         lan = json.loads(b)
-        check(st == 200 and lan["running"], f"正向：本机开启局域网访问（端口 {lan_port}）")
+        for _ in range(20):  # 机器慢时 HTTPS 端口要多等一会儿才起来
+            if lan.get("running") or lan.get("error"):
+                break
+            time.sleep(0.5)
+            lan = json.loads(req("127.0.0.1", P, "GET", "/api/lan", L)[2])
+        check(st == 200 and lan["running"], f"正向：本机开启局域网访问（端口 {lan_port}）{lan.get('error') or ''}")
 
         print("\n-- DNS rebinding（伪造 Host）--")
         st, _, _ = req("127.0.0.1", P, "GET", "/api/meetings", {"Host": f"evil.test:{P}"})
@@ -117,7 +135,7 @@ async def main():
         r = await ws_try(f"ws://127.0.0.1:{P}/ws/ambient", origin=f"http://127.0.0.1:{P}")
         check(r.startswith("accepted"), f"正向：同源连 /ws/ambient → {r[:20]}")
 
-        if ip:
+        if ip and lan["running"]:
             print(f"\n-- 局域网端口（https://{ip}:{lan_port}）--")
             T = {"Host": f"{ip}:{lan_port}"}
             st, _, _ = req(ip, lan_port, "GET", "/api/meetings", T, tls=True)
@@ -149,11 +167,14 @@ async def main():
                                urllib.parse.urlencode({"password": "wrong", "next": "/"}), tls=True)
                 codes.append(st)
             check(codes == [401] * 5 + [429], f"同一 IP 连续输错 → {codes}（输错 5 次后锁定，第 6 次 429）")
-            out = subprocess.run(["nmap", "-Pn", "-p", f"{P},{lan_port}", ip], capture_output=True, text=True).stdout
-            opened = [line.split("/")[0] for line in out.splitlines() if "/tcp" in line and " open " in line]
-            check(opened == [str(lan_port)], f"nmap 扫本机局域网 IP：开放端口 {opened}（应只有 {lan_port}，本机端口 {P} 不对外）")
+            if shutil.which("nmap"):
+                out = subprocess.run(["nmap", "-Pn", "-p", f"{P},{lan_port}", ip], capture_output=True, text=True).stdout
+                opened = [line.split("/")[0] for line in out.splitlines() if "/tcp" in line and " open " in line]
+            else:  # 没装 nmap（CI）：直接连一下
+                opened = [str(p) for p in (P, lan_port) if _connects(ip, p)]
+            check(opened == [str(lan_port)], f"扫本机局域网 IP：开放端口 {opened}（应只有 {lan_port}，本机端口 {P} 不对外）")
         else:
-            check(False, "没取到局域网 IP（en0），局域网部分没测")
+            check(False, "没取到局域网 IP（或局域网服务没起来），局域网部分没测")
 
         print("\n-- 证书（OpenSSL 独立验证）--")
         from cryptography import x509
@@ -188,6 +209,8 @@ async def main():
         check(out.isdigit() and int(out) > 500, f"20 个不同 IP 各错 1 次后，第 21 个新 IP 也被暂停登录 {out} 秒")
     finally:
         srv.stop()
+    if fails and os.environ.get("CI"):  # CI 上看不到临时目录，把服务日志打出来
+        print((tmp / "server.log").read_text("utf-8", "replace")[-4000:])
     print(f"\n{'全部通过' if not fails else f'{fails} 项失败'}（日志：{tmp / 'server.log'}）")
     if not fails:
         shutil.rmtree(tmp, ignore_errors=True)

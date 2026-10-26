@@ -21,6 +21,10 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--num-spk", type=int, default=0, help="0 = 自动判断（产品默认）")
 ap.add_argument("--vad-thres", type=float, default=None, help="全天模式的收音灵敏度（speech_noise_thres）；不给 = 手动录音的默认")
 ap.add_argument("--hotword", default="")
+ap.add_argument("--level", choices=["off", "vad", "all"], default=None,
+                help="会后转写前的音量归一（asr_engine.LEVEL_USE）；不给 = 产品当前的默认")
+ap.add_argument("--diarizer", choices=["campp", "pyannote"], default=None, help="说话人分离（asr_engine.DIARIZER）；不给 = 产品默认")
+ap.add_argument("--split-ms", type=float, default=None, help="按说话人拆句的阈值（asr_engine.SPLIT_MIN_MS）；不给 = 产品默认")
 o = ap.parse_args()
 
 tmp = Path(tempfile.mkdtemp(prefix="mn-eval-"))
@@ -31,6 +35,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import asr_engine  # noqa: E402
 
+import numpy as np  # noqa: E402
+
+if o.level is not None:
+    asr_engine.LEVEL_USE = o.level
+if o.diarizer is not None:
+    asr_engine.DIARIZER = o.diarizer
+if o.split_ms is not None:
+    asr_engine.SPLIT_MIN_MS = o.split_ms
 out = Path(o.out).expanduser()
 out.mkdir(parents=True, exist_ok=True)
 eng = asr_engine.Engine()
@@ -38,14 +50,35 @@ captured: dict = {}
 _orig = eng._diarize
 
 
-def _diarize(x, segs, num_spk=0):
-    turns = _orig(x, segs, num_spk)
+def _diarize(x, segs, num_spk=0, **kw):
+    turns = _orig(x, segs, num_spk, **kw)
     captured["turns"] = turns
     captured["segs"] = [list(map(int, s)) for s in segs]
     return turns
 
 
 eng._diarize = _diarize
+# CAM++ 声纹小块：存成和 spk_embed.py 一样的 npz（t、X、segs），供 spk_sweep 之类离线试聚类、合并
+_orig_emb = eng._spk_embeddings
+
+
+def _emb(x, segs):
+    chunks, X = _orig_emb(x, segs)
+    captured["X"], captured["chunk_t"] = np.asarray(X), [[c[0], c[1]] for c in chunks]
+    return chunks, X
+
+
+eng._spk_embeddings = _emb
+# Nano 每段的原始输出（文字 + 逐字时间戳 + 段的起止）：离线试“按说话人拆句”时用
+_orig_clauses = asr_engine.Engine._clauses
+
+
+def _clauses(text, toks, seg_start, seg_end):
+    captured.setdefault("nano_raw", []).append({"text": text, "toks": toks, "s": seg_start, "e": seg_end})
+    return _orig_clauses(text, toks, seg_start, seg_end)
+
+
+eng._clauses = _clauses
 _orig_paras = eng._paragraphs
 
 
@@ -60,6 +93,7 @@ eng.load()
 if not eng.ready:
     sys.exit(f"模型加载失败：{eng.error}")
 print(f"模型就绪 {time.time() - t:.0f}s，引擎 {o.engine}", flush=True)
+print(f"LEVEL_USE={asr_engine.LEVEL_USE} DIARIZER={asr_engine.DIARIZER} SPLIT_MIN_MS={asr_engine.SPLIT_MIN_MS}", flush=True)
 vad_kw = {"speech_noise_thres": o.vad_thres} if o.vad_thres is not None else None
 for w in map(Path, o.wavs):
     dst = out / f"{w.stem}.json"
@@ -72,5 +106,9 @@ for w in map(Path, o.wavs):
     dur = asr_engine.duration_of(w)
     dst.write_text(json.dumps({"file": w.name, "engine": o.engine, "info": eng.last_info, "duration_s": dur,
                                "cost_s": round(cost, 1), "paras": paras, "turns": captured.get("turns", []),
-                               "vad_segs": captured.get("segs", []), "sents": captured.get("sents", [])}, ensure_ascii=False))
+                               "vad_segs": captured.get("segs", []), "sents": captured.get("sents", []),
+                               "level": asr_engine.LEVEL_USE, "diarizer": asr_engine.DIARIZER, "split_ms": asr_engine.SPLIT_MIN_MS,
+                               "nano_raw": captured.get("nano_raw", [])}, ensure_ascii=False))
+    if "X" in captured and len(captured.get("chunk_t", [])) == len(captured["X"]):
+        np.savez(out / f"{w.stem}.npz", t=np.array(captured["chunk_t"]), X=captured["X"], segs=np.array(captured.get("segs", [])))
     print(f"{w.stem}: {dur / 60:.1f} 分钟，用时 {cost:.0f}s，{len(paras)} 段，{len({p['spk'] for p in paras})} 人，{eng.last_info}", flush=True)

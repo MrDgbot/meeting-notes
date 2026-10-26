@@ -10,7 +10,6 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import socket
 import struct
 import subprocess
@@ -42,7 +41,8 @@ class Server:
         self.log = open(self.data / "server.log", "ab")
         self.proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(self.port)],
                                      cwd=ROOT, env=env, stdout=self.log, stderr=subprocess.STDOUT)
-        for _ in range(300):
+        load_s = int(os.environ.get("MN_TEST_LOAD_S") or 150)  # CI 的 CPU 机器上加载模型慢，可以调大
+        for _ in range(load_s * 2):
             try:
                 if json.load(urllib.request.urlopen(f"{self.url}/api/health", timeout=2))["asr_ready"]:
                     return
@@ -51,10 +51,10 @@ class Server:
             if self.proc.poll() is not None:
                 raise RuntimeError("服务没起来，见 " + str(self.data / "server.log"))
             time.sleep(0.5)
-        raise RuntimeError("语音模型 150 秒内没加载好")
+        raise RuntimeError(f"语音模型 {load_s} 秒内没加载好")
 
     def kill(self):
-        self.proc.send_signal(signal.SIGKILL)
+        self.proc.kill()  # SIGKILL；Windows 上是 TerminateProcess
         self.proc.wait()
 
     def stop(self):

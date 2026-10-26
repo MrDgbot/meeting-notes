@@ -144,6 +144,7 @@ def test_oracle_num_spk_unchanged():
     X, _ = speakers(2, [n // 2, n - n // 2])
     eng = asr_engine.Engine.__new__(asr_engine.Engine)
     eng.full_lock = threading.Lock()
+    eng.last_info = {}
     eng.full = FakeFull(X)
     with mock.patch.object(asr_engine, "cluster_speakers", side_effect=AssertionError("指定人数时不该走新后处理")):
         eng._diarize(x, segs, num_spk=3)

@@ -7,7 +7,7 @@
 实时转写 · 说话人区分 · AI 纪要 · 会议问答 · 全天自动记录 · 手机当麦克风
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
-![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Apple%20Silicon-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.11-3776AB)
 
 </div>
@@ -30,7 +30,7 @@ meeting-notes 把整条链路搬到用户自己的电脑上。语音识别、说
 |---|---|
 | **实时转写** | 边开会边出字。可以只录麦克风，也可以同时录电脑声音（线上会议），也能上传已有的录音、视频文件 |
 | **会后精准转写** | 录音结束后自动用更大的模型整段重转：分段、补标点，按说话人整理成段落 |
-| **说话人区分** | 自动判断有几个人，也可以手动指定；给发言人改名，全篇同步 |
+| **说话人区分** | 自动判断有几个人，也可以手动指定；一句话里换了人会按声纹切开；会议室远场录音可以选专门的模式；给发言人改名，全篇同步 |
 | **AI 纪要** | 6 种会议模板：通用、周会、客户访谈、招聘面试、头脑风暴、讲座。输出概要、议题、决议、待办（负责人、截止时间）、各人观点、待跟进问题，每条都带可点击的时间戳出处 |
 | **纪要过期提醒** | 改了转写稿、发言人名或笔记之后，纪要会提示“可能已过期”，问答也不再引用旧纪要 |
 | **会议问答** | 针对一场会追问细节，只依据会议内容回答，并注明时间和发言人 |
@@ -74,14 +74,20 @@ meeting-notes 把整条链路搬到用户自己的电脑上。语音识别、说
 
 **AliMeeting Test 集：20 场，10.8 小时**
 
-| 指标 | 结果 |
-|---|---|
-| 两人会议的字错率（8 场） | **8.8%** |
-| 说话人人数判对 | **13 / 20 场** |
-| 说话人分离错误率 DER（collar 0.25 秒，含重叠） | **27.3%** |
-| 处理速度（Apple M5 Pro） | 1 小时录音约 3–9 分钟转完 |
+| 指标 | 上一版 | 现在（默认） | 现在（“会议室远场”模式） |
+|---|---|---|---|
+| 两人会议的字错率（8 场） | 8.8% | 9.0% | 9.0% |
+| 3 人会议的字错率（4 场） | 33.0% | **18.8%** | **18.8%** |
+| 全部 20 场的字错率 | 32.1% | **29.8%** | **29.8%** |
+| “谁说了什么”的错误率 cpCER | 56.1% | 49.3% | **36.0%** |
+| 说话人人数判对 | 13 / 20 | 9 / 20 | **17 / 20** |
+| 说话人分离错误率 DER（collar 0.25 秒，含重叠） | 27.3% | 24.5% | **16.4%** |
 
-**改进都有数据支撑。** 改算法之前，先写下评测方案和判定标准，再在开发集上选方案，最后在留出集上只测一次，不回头调参数。最近一次是改说话人聚类：留出集上人数判对从 9 场升到 13 场，DER 从 28.2% 降到 27.3%。评测脚本都在 [tests/eval](tests/eval/README.md)，可以复现。
+- 处理速度（Apple M5 Pro）：1 小时录音约 3–9 分钟转完；“会议室远场”模式的说话人分离另需约 0.06–0.09 倍录音时长。
+- 两种模式只差说话人分离，识别出的文字一样。“会议室远场”在这套会议室录音上明显更好，但在一场真实的近场会议录音（笔记本放桌上）上会把说得最多的人拆成两个，所以默认不用它。
+
+**改进都有数据支撑。** 改算法之前，先写下评测方案和判定标准，再在开发集上选方案，最后在留出集上只测一次，不回头调参数；没达标、变差的也照实写。
+最近一轮（[改进记录](docs/improvements.md)）：转写前把小声的录音拉到统一音量，离麦克风远的人不再被整段漏掉；一句话里换了人就按声纹切开；加了“会议室远场”模式；试了两种语音分离模型来救抢话，结果更差，没有并进来。评测脚本都在 [tests/eval](tests/eval/README.md)，可以复现。
 
 ## 工作原理
 
@@ -91,13 +97,14 @@ flowchart LR
   B["手机、平板<br/>局域网 HTTPS"] -->|"断线自动补传"| S
   C["全天模式<br/>后台监听麦克风"] --> S
   S --> L["实时转写<br/>流式 VAD + Paraformer / Fun-ASR-Nano"]
-  S --> F["会后精准转写<br/>VAD + Fun-ASR-Nano + CAM++ 声纹聚类 + 标点"]
+  S --> F["会后精准转写<br/>音量归一 + VAD + Fun-ASR-Nano<br/>+ 说话人分离（CAM++ 或 pyannote）+ 按说话人拆句"]
   F --> M["AI 纪要 · 问答 · 当日汇总<br/>云端大模型 或 本地 llama-server"]
   F --> D[("本机文件<br/>data/meetings")]
   M --> D
 ```
 
-- **语音**：[FunASR](https://github.com/modelscope/FunASR) 的 Paraformer-zh、Fun-ASR-Nano、FSMN-VAD、CT-Punc、CAM++，在 Mac 上用 Apple GPU（MPS）运行。
+- **语音**：[FunASR](https://github.com/modelscope/FunASR) 的 Paraformer-zh、Fun-ASR-Nano、FSMN-VAD、CT-Punc、CAM++。Apple Silicon 用 GPU（MPS），有 NVIDIA 显卡用 CUDA，其他情况用 CPU。
+  “会议室远场”模式另用 [pyannote](https://github.com/pyannote/pyannote-audio) community-1 做说话人分离（单独的子进程，不占实时转写的 GPU）。
 - **大模型**：任何 OpenAI 兼容接口，默认阿里百炼 qwen-plus，也可以选 DeepSeek，或本地 llama-server。
 - **前端**：原生 JavaScript，没有构建步骤。用 AudioWorklet 在浏览器里降采样到 16 kHz。电脑、平板、手机共用一套页面，按屏幕宽度自动换布局。
 
@@ -105,8 +112,8 @@ flowchart LR
 
 **环境**
 
-- macOS + Apple Silicon（目前只在这个平台上验证过）
-- [uv](https://docs.astral.sh/uv/) 和 ffmpeg：`brew install uv ffmpeg`
+- macOS（Apple Silicon，主要开发和实测平台）、Linux、Windows 都能跑；没有 GPU 时用 CPU，转写会慢很多。各平台的细节见 [使用说明](docs/guide.md#启动)
+- [uv](https://docs.astral.sh/uv/) 和 ffmpeg：macOS `brew install uv ffmpeg`；Linux `apt install ffmpeg`；Windows `winget install astral-sh.uv Gyan.FFmpeg`
 - 内存：语音模型常驻约 9–10 GB（实测），建议 16 GB 以上；本地大模型另需约 38 GB，用云端纪要就不需要
 - 磁盘：第一次启动会自动从 ModelScope 下载约 4 GB 语音模型
 
@@ -115,8 +122,11 @@ flowchart LR
 ```bash
 git clone https://github.com/MrDgbot/meeting-notes.git
 cd meeting-notes
-./start.sh                 # 自动安装依赖、下载模型，然后打开 http://127.0.0.1:8770
+./start.sh                 # macOS / Linux：自动安装依赖、下载模型，然后打开 http://127.0.0.1:8770
+.\start.ps1                # Windows（PowerShell）
 ```
+
+也可以用 Docker（Linux 容器，CPU）：`docker build -t meeting-notes .`，运行参数见 [使用说明](docs/guide.md#dockerlinux-容器cpu)。
 
 ![首页：新建会议，选模板、人数、热词和音频来源](docs/images/desktop-home.png)
 
@@ -134,15 +144,20 @@ AI 纪要要配一个大模型接口：在网页“设置”里填 API Key，或
 | 手机、平板访问 | 只在局域网内传输：HTTPS 加密，要输访问口令 |
 | 憨包云端识别（实验性，默认没有，要自己配置） | 录音片段 |
 
+语音模型第一次用时从 ModelScope 下载，之后只从本地加载。pyannote 默认会发用法统计（音频时长、人数，不含音频）到它的服务器，本项目在导入前强制关掉，并有断网测试确认一次网络连接都不发起（`tests/test_diarize_offline.py`）。
+
 局域网访问默认关闭。打开后用的是这台 Mac 自己签发的根证书，并带名称限制：只能给内网地址签证书，就算证书私钥泄露，也冒充不了任何公网网站。此外还防 DNS rebinding 和跨站请求，口令只存哈希，输错多次会锁定。这些都有对抗测试覆盖（`tests/test_lan_security.py`）。
 
 ## 已知短板
 
 说清楚现在做不好的地方：
 
-- **多人同时说话会漏字**：AliMeeting 上重叠发言约占说话时间的 20%，目前每个时刻只认一个人。3–4 人、频繁抢话的会议，字错率在 33%–47%。下一步是做重叠检测。
-- **4 人的会议，人数容易判少**：知道人数时手动填上，效果明显更好。
-- **平台**：目前只在 macOS（Apple Silicon）上验证过。全天模式依赖 macOS 的录音接口，Windows、Linux 还没有适配。
+- **多人同时说话会漏字**：AliMeeting 上重叠发言约占说话时间的 20%，65% 的错字出在以重叠为主的片段里；4 人、频繁抢话的会议字错率仍在 46% 左右。
+  试过把重叠的声音先分离成两路再识别（sepformer、MossFormer2 两个现成模型），在重叠片段上字错率反而从 38.7% 升到 50% 左右，没有采用。
+- **人数判断**：默认模式下 4 人会议仍容易判少；这一轮音量归一以后，小声的 3 人会议又容易多判一个人（Test 上人数判对从 13 场降到 9 场）。
+  会议室录音选“会议室远场”模式（17 / 20），知道人数时在新建会议时填上，最可靠。
+- **平台**：主要在 macOS（Apple Silicon）上开发和实测。Linux（Ubuntu、Docker）和 Windows 用 CI 跑过测试和端到端转写；Linux 的全天模式通过 PulseAudio / PipeWire 采音已验证，
+  Windows 的全天模式用 DirectShow 采音，真实麦克风还没在真机上验证。GPU 只支持 Apple Silicon（MPS）和 NVIDIA（CUDA），其他情况用 CPU，会慢很多。
 
 ## 文档
 
@@ -155,4 +170,7 @@ AI 纪要要配一个大模型接口：在网页“设置”里填 API Key，或
 Copyright (C) 2026 MrDgbot
 
 本项目以 [GNU AGPL-3.0](LICENSE)（或更高版本）发布：可以自由使用、修改、再发布；改过的版本只要发给别人，或者部署成服务让别人通过网络使用，就必须以同样的许可证公开完整源码。
-语音模型（FunASR、Fun-ASR-Nano 等）运行时从 ModelScope 下载，不在本仓库里，各自遵守其模型许可证。
+语音模型运行时从 ModelScope 下载，不在本仓库里，各自遵守其模型许可证：
+
+- FunASR 的 Paraformer-zh、Fun-ASR-Nano、FSMN-VAD、CT-Punc、CAM++：见各模型页的许可证。
+- “会议室远场”模式用的 [pyannote speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)（作者 pyannoteAI，[CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)），本项目未修改模型本身，只在它的输出上用 CAM++ 声纹合并相近的说话人。

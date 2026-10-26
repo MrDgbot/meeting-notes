@@ -1,4 +1,6 @@
 """FunASR 封装：会后整段转写（含说话人分离）+ 会中实时转写（流式 VAD + 分段识别）。"""
+import bisect
+import json
 import logging
 import re
 import subprocess
@@ -24,6 +26,18 @@ _cb.SpectralCluster.cluster_embs = lambda self, emb, k: _cb.k_means(emb, k, rand
 SV_STEP = 0.75        # 声纹小块的步长（秒），sv_chunk 的默认值
 SPK_MIN_SEC = 30      # 总时长不到这么多秒的说话人，逐块并进最近的人
 SPK_MERGE_THR = 0.72  # 两个说话人声纹中心的余弦相似度超过它就合并（FunASR 默认 0.78）
+# 一句话里换了人、换过去的人连续说够这么多毫秒才切开；0 = 不切，整句归一人（选法见 docs/improvements.md 第 2 项）
+SPLIT_MIN_MS = 1000
+# 说话人分离用哪个（设置里的 asr.diarizer，没设时用 DIARIZER）。选法见 docs/improvements.md 第 4 项：
+# "campp" = CAM++ 声纹小块聚类（cluster_speakers），默认；近场录音（笔记本、手机放桌上）上明显更好。
+# "pyannote" = 子进程跑 pyannote community-1（diarize_worker.py）+ 用 CAM++ 声纹合并太像的说话人（PYA_MERGE_THR）；
+#   会议室远场、多人围坐抢话时人数和说话人更准，但会把近场长录音里说得最多的人拆成两个。失败时自动退回 CAM++。
+DIARIZER = "campp"
+DIARIZERS = {
+    "campp": "标准（推荐）：笔记本、手机放在桌上录，或线上会议",
+    "pyannote": "会议室远场：多人围坐、离麦克风远、经常抢话（首次使用下载约 31 MB 模型）",
+}
+PYA_MERGE_THR = 0.78
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -74,8 +88,53 @@ def cluster_speakers(X: np.ndarray, cb, seed: int = 0, min_sec: float = SPK_MIN_
         labels[m] = cb.merge_by_cos(lab, X[m], merge_thr) if len(uniq) > 1 else lab
     return labels
 
+
+def merge_turn_speakers(turns: list[tuple], chunk_t: list, X: np.ndarray, thr: float | None = None) -> list[tuple]:
+    """把 pyannote 分出来、但 CAM++ 声纹其实很像的说话人并成一个（选法见 docs/improvements.md 第 4 项）。
+    pyannote 在近场长录音里会把说得最多的那个人拆成两个（一场 95 分钟的近场周会：一个人 2300 秒被拆成 1181 + 1004 秒）。
+    做法：每个 CAM++ 声纹小块归给和它重合最多的 pyannote 说话人，算每人的声纹中心；
+    两两余弦相似度超过 thr（默认 SPK_MERGE_THR，和 CAM++ 聚类合并用的同一个阈值）就并，最像的一对先并，并完重算，直到没有超过的。
+    chunk_t：每块的 [开始秒, 结束秒]；turns：[(开始ms, 结束ms, 说话人)]。说话人按第一次出现的先后重新编号。"""
+    thr = SPK_MERGE_THR if thr is None else thr
+    if not turns or len(X) == 0:
+        return turns
+    tl = sorted(turns)
+    starts = [t[0] for t in tl]
+    U = _unit(np.asarray(X, dtype=np.float64))
+    members: dict[int, list[int]] = {}
+    for i, (a, b) in enumerate(chunk_t):
+        a, b = a * 1000, b * 1000
+        k = max(bisect.bisect_right(starts, a) - 1, 0)
+        best, best_ov = None, 0.0
+        while k < len(tl) and tl[k][0] < b:
+            ov = min(b, tl[k][1]) - max(a, tl[k][0])
+            if ov > best_ov:
+                best, best_ov = tl[k][2], ov
+            k += 1
+        if best is not None:
+            members.setdefault(best, []).append(i)
+    groups = {s: list(ix) for s, ix in members.items()}
+    root = {s: s for s in {t[2] for t in tl}}
+    while len(groups) > 1:
+        ks = sorted(groups)
+        C = _unit(np.stack([U[groups[k]].mean(0) for k in ks]))
+        S = C @ C.T
+        np.fill_diagonal(S, -1)
+        i, j = np.unravel_index(np.argmax(S), S.shape)
+        if S[i, j] <= thr:
+            break
+        a, b = ks[i], ks[j]
+        if len(groups[b]) > len(groups[a]):
+            a, b = b, a
+        groups[a] += groups.pop(b)
+        for s, r in root.items():
+            if r == b:
+                root[s] = a
+    order: dict[int, int] = {}
+    return [(a, b, order.setdefault(root[s], len(order))) for a, b, s in tl]
+
 log = logging.getLogger("asr")
-DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 SR = 16000
 PUNC_RE = re.compile(r"[，。？！、,.?!；;：:\s]")
 CLAUSE_END = set("，。？！；：、,.?!;:")
@@ -94,6 +153,11 @@ from vocab import SPELLED_RE  # noqa: E402  Nano 常把缩写拆成单个字母�
 def asr_mode() -> str:
     m = (store.get_settings().get("asr") or {}).get("model", "nano")
     return m if m in ASR_MODELS else "nano"
+
+
+def diarizer_mode() -> str:
+    m = (store.get_settings().get("asr") or {}).get("diarizer") or DIARIZER
+    return m if m in DIARIZERS else "campp"
 
 
 def hotword_list(hotword: str) -> list[str]:
@@ -152,6 +216,38 @@ def _boost(a: np.ndarray, target_db: float = -22.0, max_gain_db: float = 24.0) -
     if gain_db <= 0:
         return a
     return np.clip(a * (10 ** (gain_db / 20)), -1.0, 1.0).astype(np.float32)
+
+
+# 会后转写前的音量归一（选法和测试结果见 docs/improvements.md 第 1 项）。
+# 离麦克风远、说话小声的人，整段录音只有 -50 dBFS 上下，VAD 会把他整段当成静音（AliMeeting 上有人 91% 的话被漏掉）。
+# 整段按 RMS 放大到 LEVEL_DB：只放大不缩小，最多放大 LEVEL_MAX_GAIN_DB，0.8 以上软限幅免得削波。
+LEVEL_DB = -30.0
+LEVEL_MAX_GAIN_DB = 30.0
+LEVEL_USE = "all"  # "off" 不处理；"vad" 只给语音检测用；"all" 识别和声纹也用放大后的音频（pyannote 总是用原始录音）
+
+
+def level(x: np.ndarray, target_db: float | None = None, max_gain_db: float | None = None) -> np.ndarray:
+    target_db = LEVEL_DB if target_db is None else target_db
+    max_gain_db = LEVEL_MAX_GAIN_DB if max_gain_db is None else max_gain_db
+    rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) if len(x) else 0.0
+    if rms <= 1e-7:
+        return x
+    gain_db = min(target_db - 20 * np.log10(rms), max_gain_db)
+    if gain_db <= 0.5:
+        return x
+    y = x.astype(np.float32) * np.float32(10 ** (gain_db / 20))
+    a = np.abs(y)
+    over = a > 0.8
+    y[over] = np.sign(y[over]) * (0.8 + 0.2 * np.tanh((a[over] - 0.8) / 0.2))
+    return y
+
+
+def level_pair(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """按 LEVEL_USE 返回 (识别和声纹用的音频, 语音检测用的音频)。"""
+    if LEVEL_USE == "off":
+        return x, x
+    y = level(x)
+    return (y if LEVEL_USE == "all" else x), y
 
 
 def to_wav16k(src: str | Path, dst: str | Path) -> None:
@@ -275,14 +371,14 @@ class Engine:
         return vad.generate(input=x)[0]["value"]
 
     def trim(self, force: bool = False, every: float = 20.0):
-        """释放 MPS 缓存。输入长度每次不同，PyTorch 的 MPS 缓存会只涨不降（实测 300 次识别涨 6GB），
+        """释放 MPS / CUDA 缓存。输入长度每次不同，PyTorch 的 MPS 缓存会只涨不降（实测 300 次识别涨 6GB），
         定期 empty_cache 即可回落；它只释放空闲块，不影响正在进行的推理。"""
-        if DEVICE != "mps":
+        if DEVICE not in ("mps", "cuda"):
             return
         now = time.time()
         if force or now - self._last_trim >= every:
             self._last_trim = now
-            torch.mps.empty_cache()
+            (torch.cuda if DEVICE == "cuda" else torch.mps).empty_cache()
 
     # ---------- 标点 ----------
     def repunc(self, text: str) -> str:
@@ -365,8 +461,12 @@ class Engine:
             kw["preset_spk_num"] = int(num_spk)
         if hotword.strip():
             kw["hotword"] = hotword.strip()
+        inp: str | np.ndarray = str(wav)
+        if LEVEL_USE != "off":  # Paraformer 管线自带 VAD，分不开：音量归一后整段送进去（相当于 "all"）
+            xw, _ = sf.read(str(wav), dtype="float32")
+            inp = level(xw[:, 0] if xw.ndim > 1 else xw)
         with self.full_lock:
-            res = self.full.generate(input=str(wav), **kw)[0]
+            res = self.full.generate(input=inp, **kw)[0]
             sents = res.get("sentence_info") or []
             if not sents and res.get("text"):
                 sents = [{"spk": 0, "start": 0, "end": int(duration_of(wav) * 1000), "text": res["text"]}]
@@ -385,11 +485,12 @@ class Engine:
         x, sr = sf.read(str(wav), dtype="float32")
         if x.ndim > 1:
             x = x[:, 0]
-        segs = self._offline_segs(x, vad_kw)
+        x, xv = level_pair(x)
+        segs = self._offline_segs(xv, vad_kw)
         if not segs:
             self.last_info = {"engine": "hanbao", "units": 0}
             return []
-        turns = self._diarize(x, segs, num_spk)
+        turns = self._diarize(x, segs, num_spk, wav=wav)
         units = self._speaker_units(segs, turns)
         total_ms = len(x) * 1000 // SR
         clips = []
@@ -416,7 +517,8 @@ class Engine:
             text = SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip()))
             if text:
                 sents.append({"spk": spk, "start": s, "end": e, "text": text})
-        self.last_info = {"engine": "hanbao", "units": len(units), "failed": len(errs), "local": n_local}
+        self.last_info = {**{k: v for k, v in self.last_info.items() if k.startswith("diarizer")},
+                          "engine": "hanbao", "units": len(units), "failed": len(errs), "local": n_local}
         return self._paragraphs(sents)
 
     @staticmethod
@@ -488,33 +590,74 @@ class Engine:
                     units.append(cur)
         return units
 
-    def _diarize(self, x: np.ndarray, segs: list, num_spk: int = 0) -> list[tuple[int, int, int]]:
-        """说话人分离：语音段切成 1.5s 小块（步长 0.75s）提 CAM++ 声纹 → 聚类 → [(开始ms, 结束ms, 说话人)]。
+    def _diarize_pyannote(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
+        import sys
+        import tempfile
+        out = Path(tempfile.mkstemp(suffix=".json", prefix="diar-")[1])
+        try:
+            p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_worker.py")), str(wav), str(out),
+                                str(int(num_spk or 0))], capture_output=True, text=True,
+                               timeout=max(900, duration_of(wav) * 1.5))
+            if p.returncode != 0:
+                raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
+            r = json.loads(out.read_text())
+        finally:
+            out.unlink(missing_ok=True)
+        log.info("pyannote diarization on %s: load %.1fs, run %.1fs, %d turns", r.get("device"), r.get("load_s", 0),
+                 r.get("run_s", 0), len(r["turns"]))
+        return [(int(a), int(b), int(s)) for a, b, s in r["turns"]]
+
+    def _diarize(self, x: np.ndarray, segs: list, num_spk: int = 0, wav: Path | None = None) -> list[tuple[int, int, int]]:
+        """说话人分离 → [(开始ms, 结束ms, 说话人)]，每个时刻一个人。
+        diarizer_mode() 是 "pyannote" 且给了 wav：子进程跑 pyannote（用原始录音，不受 LEVEL_USE 影响），
+        再用 CAM++ 声纹合并太像的说话人；出错就退回下面的 CAM++。
+        CAM++：语音段切成 1.5s 小块（步长 0.75s）提 CAM++ 声纹 → 聚类。
         以前借用 Paraformer 的整句来定说话人，一句里夹着两个人就整句归给一个人，
         而且远场录音里 Paraformer 的句子时间会整体偏几秒，说话人跟着错位。"""
-        chunks = _sv_chunk([[s / 1000, e / 1000, x[int(s * SR / 1000):int(e * SR / 1000)]] for s, e in segs])
+        if diarizer_mode() == "pyannote" and wav is not None:
+            try:
+                turns = self._diarize_pyannote(wav, num_spk)
+                if not (num_spk and num_spk > 0):  # 指定了人数就照 pyannote 的，不再合并
+                    chunks, X = self._spk_embeddings(x, segs)
+                    n0 = len({t[2] for t in turns})
+                    turns = merge_turn_speakers(turns, [[c[0], c[1]] for c in chunks], X, PYA_MERGE_THR)
+                    log.info("pyannote speakers %d -> %d after CAM++ merge", n0, len({t[2] for t in turns}))
+                self.last_info["diarizer"] = "pyannote"
+                return turns
+            except Exception as e:  # noqa: BLE001
+                log.exception("pyannote diarization failed, falling back to CAM++")
+                self.last_info["diarizer_failed"] = f"{type(e).__name__}: {e}"[:200]
+        self.last_info["diarizer"] = "campp"
+        chunks, X = self._spk_embeddings(x, segs)
         if not chunks:
             return []
-        embs = []
-        for i in range(0, len(chunks), 128):  # 分批占 GPU，实时识别可以插队
-            with self.full_lock:
-                res = self.full.inference([c[2] for c in chunks[i:i + 128]], input_len=None,
-                                          model=self.full.spk_model, kwargs=self.full.spk_kwargs)
-            embs.append(torch.cat([r["spk_embedding"] for r in res]).cpu())
-        X = torch.cat(embs).numpy()
         if num_spk and num_spk > 0:  # 用户指定了人数：照旧交给 FunASR
             labels = self.full.cb_model(X, oracle_num=int(num_spk))
         else:
             labels = cluster_speakers(X, self.full.cb_model)
         return [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
 
+    def _spk_embeddings(self, x: np.ndarray, segs: list) -> tuple[list, np.ndarray]:
+        """语音段切成 1.5s 小块（步长 0.75s），每块一个 CAM++ 声纹。返回 (小块 [开始秒, 结束秒, 音频], 声纹矩阵)。"""
+        chunks = _sv_chunk([[s / 1000, e / 1000, x[int(s * SR / 1000):int(e * SR / 1000)]] for s, e in segs])
+        if not chunks:
+            return [], np.zeros((0, 192), dtype=np.float32)
+        embs = []
+        for i in range(0, len(chunks), 128):  # 分批占 GPU，实时识别可以插队
+            with self.full_lock:
+                res = self.full.inference([c[2] for c in chunks[i:i + 128]], input_len=None,
+                                          model=self.full.spk_model, kwargs=self.full.spk_kwargs)
+            embs.append(torch.cat([r["spk_embedding"] for r in res]).cpu())
+        return chunks, torch.cat(embs).numpy()
+
     def _nano_transcribe(self, wav: Path, num_spk: int, hotword: str, vad_kw: dict | None = None) -> list[dict]:
         x, sr = sf.read(str(wav), dtype="float32")
         if x.ndim > 1:
             x = x[:, 0]
+        x, xv = level_pair(x)
         # 相邻语音并成最长 30 秒的大段，Nano 上下文越长越准（切成碎句明显变差）
-        segs = self._offline_segs(x, vad_kw)
-        turns = self._diarize(x, segs, num_spk)
+        segs = self._offline_segs(xv, vad_kw)
+        turns = self._diarize(x, segs, num_spk, wav=wav)
         # 停顿 ≤1.2s 的相邻段连同停顿一起识别：VAD 常在句中换气处切开，后半句没了上下文就认错
         # （实测“通过各个层面的数据去看”被切成两段后认成“你出货/团队的数据”）。
         # 停顿放宽到 2s 反而变差：夹进太多噪声，Nano 会丢标点、错字变多。
@@ -537,18 +680,98 @@ class Engine:
             if r["text"]:
                 clauses += self._clauses(r["text"], r["timestamps"], s, e)
             self.trim()
-        # 按整句定说话人（句号/问号/感叹号结尾，或与下一小句停顿 ≥1s 处断开）：取整句时间内声纹占多数的人。
-        # 逐小句判断在远场录音里会在一句话中间来回跳（“我花二十块钱了，｜我讲四十块钱”分给两个人）
+        return self._assign_speakers(clauses, turns)
+
+    @classmethod
+    def _assign_speakers(cls, clauses: list[dict], turns: list[tuple], min_ms: float | None = None) -> list[dict]:
+        """给小句定说话人。按整句定（句号/问号/感叹号结尾，或与下一小句停顿 ≥1s 处断开）：取整句时间内声纹占多数的人。
+        逐小句判断在远场录音里会在一句话中间来回跳（“我花二十块钱了，｜我讲四十块钱”分给两个人）。
+        但 Nano 常把两个人的话识别成一句（“……办几天比较合适呀都是一天吧。”），整句只能归给一个人：
+        min_ms > 0 时按逐字时间戳看声纹，句中换了人、而且换过去的人连续说够 min_ms 毫秒，就在那里切开（见 _split_sentence）。"""
+        min_ms = SPLIT_MIN_MS if min_ms is None else min_ms
+        out: list[dict] = []
         sent: list[dict] = []
         for i, c in enumerate(clauses):
             sent.append(c)
             nxt = clauses[i + 1] if i + 1 < len(clauses) else None
             if nxt is None or c["text"][-1] in "。？！?!" or nxt["start"] - c["end"] >= 1000:
-                spk = self._spk_major(turns, sent)
+                spk = cls._spk_major(turns, sent)
                 for x_ in sent:
                     x_["spk"] = spk
+                out += cls._split_sentence(sent, turns, min_ms) if (min_ms > 0 and turns) else sent
                 sent = []
-        return clauses
+        return out
+
+    @staticmethod
+    def _split_sentence(sent: list[dict], turns: list[tuple], min_ms: float) -> list[dict]:
+        """一句话（几个小句）按逐字的说话人切开：每个字取它时间中点所在的说话人时间段（没时间戳的字跟前一个字），
+        连续同一人的字成一串；不到 min_ms 的串并进相邻的串（两边是同一人就三串并一）。
+        只剩一串就原样返回（说话人仍按整句多数）；否则在串的边界切开，边界前后 3 个字以内有标点就挪到标点后面。"""
+        chars: list[tuple] = []
+        for c in sent:
+            ct = c.get("ct") or [None] * len(c["text"])
+            chars += list(zip(c["text"], ct))
+        tl = sorted(turns)
+        starts = [t[0] for t in tl]
+
+        def spk_of(ms: float) -> int:
+            k = bisect.bisect_right(starts, ms) - 1
+            if k >= 0 and tl[k][1] > ms:
+                return tl[k][2]
+            cand = [j for j in (k, k + 1) if 0 <= j < len(tl)]
+            return tl[min(cand, key=lambda j: min(abs(tl[j][0] - ms), abs(tl[j][1] - ms)))][2]
+
+        labs, prev = [], None
+        for _, t in chars:
+            if t:
+                prev = spk_of((t[0] + t[1]) / 2)
+            labs.append(prev)
+        first = next((v for v in labs if v is not None), None)
+        if first is None:
+            return sent
+        labs = [first if v is None else v for v in labs]
+        runs: list[list] = []  # [说话人, 起始字下标, 结束字下标（不含）]
+        for i, v in enumerate(labs):
+            if runs and runs[-1][0] == v:
+                runs[-1][2] = i + 1
+            else:
+                runs.append([v, i, i + 1])
+
+        def dur(r: list) -> int:
+            ts = [t for _, t in chars[r[1]:r[2]] if t]
+            return ts[-1][1] - ts[0][0] if ts else 0
+
+        while len(runs) > 1:
+            short = [k for k in range(len(runs)) if dur(runs[k]) < min_ms]
+            if not short:
+                break
+            k = min(short, key=lambda k: dur(runs[k]))
+            if 0 < k < len(runs) - 1 and runs[k - 1][0] == runs[k + 1][0]:
+                runs[k - 1:k + 2] = [[runs[k - 1][0], runs[k - 1][1], runs[k + 1][2]]]
+                continue
+            nb = [j for j in (k - 1, k + 1) if 0 <= j < len(runs)]
+            j = max(nb, key=lambda j: dur(runs[j]))
+            lo, hi = min(j, k), max(j, k)
+            runs[lo:hi + 1] = [[runs[j][0], runs[lo][1], runs[hi][2]]]
+        if len(runs) == 1:
+            return sent
+        cuts = [0]
+        for r in runs[1:]:
+            b = r[1]
+            near = [p for p in range(max(b - 3, cuts[-1] + 1), min(b + 3, len(chars) - 1)) if chars[p][0] in CLAUSE_END]
+            cuts.append(min(near, key=lambda p: abs(p + 1 - b)) + 1 if near else b)
+        cuts.append(len(chars))
+        out: list[dict] = []
+        for (spk, _, _), a, b in zip(runs, cuts, cuts[1:]):
+            piece = chars[a:b]
+            text = "".join(ch for ch, _ in piece).strip()
+            if not text:
+                continue
+            ts = [t for _, t in piece if t]
+            prev_end = out[-1]["end"] if out else sent[0]["start"]
+            out.append({"start": ts[0][0] if ts else prev_end, "end": ts[-1][1] if ts else prev_end,
+                        "text": text, "spk": spk, "ct": [t for _, t in piece]})
+        return out or sent
 
     @staticmethod
     def _spk_major(turns: list[tuple], sent: list[dict]) -> int:
@@ -566,7 +789,7 @@ class Engine:
 
     @staticmethod
     def _clauses(text: str, toks: list[dict], seg_start: int, seg_end: int) -> list[dict]:
-        """按 Nano 的逐字时间戳把一段文字切成小句（逗号/句号处），每句带起止时间。"""
+        """按 Nano 的逐字时间戳把一段文字切成小句（逗号/句号处），每句带起止时间，ct 是逐字的 (开始, 结束) 或 None。"""
         times: list = [None] * len(text)
         low, i = text.lower(), 0
         for tk in toks:
@@ -580,25 +803,28 @@ class Engine:
             for k in range(j, j + len(w)):
                 times[k] = (st, en)
             i = j + len(w)
-        out, buf, ts = [], "", []
+        out, buf, bt = [], "", []
 
         def flush():
-            nonlocal buf, ts
-            if buf.strip():
+            nonlocal buf, bt
+            lo, hi = len(buf) - len(buf.lstrip()), len(buf.rstrip())
+            if hi > lo:
+                ts = [t for t in bt[lo:hi] if t]
                 prev = out[-1]["end"] if out else seg_start
-                out.append({"start": ts[0][0] if ts else prev, "end": ts[-1][1] if ts else prev, "text": buf.strip()})
-            buf, ts = "", []
+                out.append({"start": ts[0][0] if ts else prev, "end": ts[-1][1] if ts else prev,
+                            "text": buf[lo:hi], "ct": bt[lo:hi]})
+            buf, bt = "", []
         for ch, t in zip(text, times):
             buf += ch
-            if t:
-                ts.append(t)
+            bt.append(t)
             if ch in CLAUSE_END:
                 flush()
         flush()
         for c in out:
             c["end"] = max(c["end"], c["start"])
         if out and not any(times):  # 没有时间戳：整段一句
-            out = [{"start": seg_start, "end": seg_end, "text": "".join(c["text"] for c in out)}]
+            t = "".join(c["text"] for c in out)
+            out = [{"start": seg_start, "end": seg_end, "text": t, "ct": [None] * len(t)}]
         return out
 
     @staticmethod

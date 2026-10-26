@@ -3,8 +3,8 @@
 //   2. 黑洞 10 秒（连接没断但数据不通，浏览器察觉不到）：8 秒没确认就主动重连
 //   3. 主线程卡 4 秒（消息晚到）：不能误报“没录到”
 //   4. 声音处理被挂起 5 秒（相当于来电打断）：必须记一个约 5 秒的缺口
-//   5. 断网时点“结束录音”：显示“正在把剩下的录音传到 Mac”，连上后传完再结束
-// 最后核对：页面产生的字节 = Mac 收到的字节 = pcm 文件里这次录音的字节；健康记录里重连次数、缺口都对。
+//   5. 断网时点“结束录音”：显示“正在把剩下的录音传到电脑”，连上后传完再结束
+// 最后核对：页面产生的字节 =电脑收到的字节 = pcm 文件里这次录音的字节；健康记录里重连次数、缺口都对。
 // 用法：MN_URL=http://127.0.0.1:8772 MN_WAV=/tmp/speech.wav node rec-resume.mjs
 import { chromium } from "@playwright/test";
 import net from "node:net";
@@ -35,7 +35,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let fail = 0;
 const check = (ok, msg) => { console.log(`${ok ? "通过" : "失败"}  ${msg}`); if (!ok) fail++; };
 
-// --disable-audio-output：用假的音频输出时钟（无头浏览器在 Mac 锁屏时拿不到系统音频输出，AudioContext 时钟不走）
+// --disable-audio-output：用假的音频输出时钟（无头浏览器在电脑锁屏时拿不到系统音频输出，AudioContext 时钟不走）
 const browser = await chromium.launch({ args: ["--disable-audio-output", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", ...(WAV ? [`--use-file-for-fake-audio-capture=${WAV}`] : []), "--autoplay-policy=no-user-gesture-required"] });
 const ctx = await browser.newContext({ permissions: ["microphone"], viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();
@@ -96,7 +96,7 @@ const produced = await page.evaluate(() => REC.next * 3200 + REC.dropped);
 await page.click("#rStop");
 await sleep(1500);
 const ban = await page.evaluate(() => (document.querySelector("#lostSlot") || {}).innerText || "");
-check(/正在把剩下的录音传到 Mac/.test(ban), `断网时结束：提示“${ban.split("\n")[0]}”`);
+check(/正在把剩下的录音传到电脑/.test(ban), `断网时结束：提示“${ban.split("\n")[0]}”`);
 await page.waitForFunction(() => !REC.active && !REC.stopping, null, { timeout: 30000 });
 const finalProduced = await page.evaluate(() => REC.next * 3200 + REC.dropped);
 await sleep(1500);
@@ -104,9 +104,9 @@ await sleep(1500);
 const m = await (await fetch(`${UP.origin}/api/meetings/${mid}`)).json();
 const h = (m.meta.rec_health || []).at(-1) || {};
 check(h.end === "stop", `录音正常结束（end=${h.end}）`);
-check(h.received === finalProduced && h.produced === finalProduced, `字节对账：页面产生 ${finalProduced}，Mac 收到 ${h.received}，页面上报 ${h.produced}`);
+check(h.received === finalProduced && h.produced === finalProduced, `字节对账：页面产生 ${finalProduced}，电脑收到 ${h.received}，页面上报 ${h.produced}`);
 check(h.reconnects >= 3, `重连 ${h.reconnects} 次`);
-check((h.gaps || []).length === 1 && h.gaps[0].reason === "interrupted", `Mac 记下的缺口：${JSON.stringify(h.gaps)}`);
+check((h.gaps || []).length === 1 && h.gaps[0].reason === "interrupted", `电脑记下的缺口：${JSON.stringify(h.gaps)}`);
 if (DATA) {
   const size = fs.statSync(`${DATA}/meetings/${mid}/audio.pcm`).size;
   check(size === h.start_bytes + finalProduced, `pcm 文件 ${size} 字节 = 起点 ${h.start_bytes} + 本次 ${finalProduced}`);
