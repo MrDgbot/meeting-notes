@@ -2,6 +2,7 @@
 name = "meeting-notes"
 version = "0.1.0"
 description = "本地会议记录：实时转写 + 说话人分离 + AI 纪要"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "funasr>=1.4.16",

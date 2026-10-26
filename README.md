@@ -114,3 +114,11 @@ MN_URL=... MN_LAN=https://<IP>:<端口> node ui-checks.mjs            # 微信/�
   开启期间用 `caffeinate` 阻止空闲休眠（合盖用电池仍会休眠）。
 - 所有参数在“设置 · 全天模式”中调整，保存在 `data/settings.json` 的 `ambient` 字段；服务重启后按上次开关状态自动恢复。
 - 测试：`MEETING_DATA=/tmp/xx AMBIENT_TEST_FILE=xx.wav AMBIENT_TEST_READRATE=4 ./start.sh` 用音频文件代替麦克风，数据写到临时目录、不碰真实记录。
+
+## 许可证
+
+Copyright (C) 2026 MrDgbot
+
+本项目以 [GNU AGPL-3.0](LICENSE)（或更高版本）发布：可以自由使用、修改、再发布，但改过的版本只要发给别人，
+或者部署成服务让别人通过网络使用，就必须以同样的许可证公开完整源码。
+语音模型（FunASR、Fun-ASR-Nano 等）运行时从 ModelScope 下载，不在本仓库里，各自遵守其模型许可证。
