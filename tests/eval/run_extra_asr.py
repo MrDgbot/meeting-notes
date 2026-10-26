@@ -2,8 +2,7 @@
 
   .venv/bin/python tests/eval/run_extra_asr.py --out ~/eval-out/extra-asr <wav...>
 
-切分：fsmn-vad，每段最长 30 秒，max_end_silence_time=800（关掉 FunASR 的动态静音，阈值用模型默认 0.6；
-）。每段分别送两个模型，输出 <out>/<engine>/<名字>.json：{"sents": [{start, end, text}]}。
+切分：fsmn-vad，每段最长 30 秒，max_end_silence_time=800（关掉 FunASR 的动态静音，阈值用模型默认 0.6）。每段分别送两个模型，输出 <out>/<engine>/<名字>.json：{"sents": [{start, end, text}]}。
 """
 import argparse
 import json
