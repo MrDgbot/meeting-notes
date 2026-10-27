@@ -64,6 +64,7 @@ docker run -d --name meeting-notes -p 127.0.0.1:8770:8770 -e MN_LOCAL_CLIENTS=17
   - 按说话人拆句：Nano 常把两个人的话识别成一句；按逐字时间戳看声纹，句中换了人、而且换过去的人连续说了 1 秒以上，就在那里切开（`SPLIT_MIN_MS`）。
   - 区分说话人（“设置 · 语音识别 · 区分说话人”）：
     - 标准（默认）：CAM++ 声纹聚类。笔记本、手机放在桌上录，或线上会议，用这个。
+      总共说话不到 30 秒的人会被并进声音最像的人；语音不到 5 分钟的短录音，这个门槛按语音时长的 10% 放低（`SPK_MIN_FRAC`），不然一两分钟的录音全成了一个人。
     - 会议室远场：多人围坐、离麦克风远、经常抢话的会议室录音。用 [pyannote](https://github.com/pyannote/pyannote-audio) community-1（自带重叠检测），再用 CAM++ 声纹合并太像的说话人。
       第一次用时从 ModelScope 下载约 31 MB 模型；在单独的子进程里用 GPU 跑（`diarize_worker.py`），不占实时转写的 GPU 锁；出错时自动退回标准方式。
       pyannote 默认会发用法统计，这里强制关掉，断网也能跑。近场录音别选它：它会把说得最多的人拆成两个。
@@ -71,9 +72,19 @@ docker run -d --name meeting-notes -p 127.0.0.1:8770:8770 -e MN_LOCAL_CLIENTS=17
   它用的是非公开接口，仓库里不带服务地址、应用标识和设备参数；要用就自己准备 `data/hanbao.json`
   （或用环境变量 `HANBAO_CONFIG` 指定文件，字段见 `hanbao_asr.py` 的 `config()`），没有这个文件时设置里不出现这一项。
   录音会上传到对方服务器；是否有权这样调用、是否符合对方服务条款，由使用者自己确认，接口随时可能失效。
+  这个接口不接受热词（试过的几种传法都没有效果），热词只在它没出字、改用本机补识别时才用得上，所以要靠下面的“可能认错的热词”提示。
 - AI 纪要：OpenAI 兼容接口，在网页“设置”中配置（默认阿里百炼 qwen-plus，可选 DeepSeek / 本地 llama-server）。
   API Key 也可用环境变量 `DASHSCOPE_API_KEY` / `DEEPSEEK_API_KEY` 提供。
   接口删多了可以点“恢复默认接口”；已保存的 Key 可以“清除”。
+  推理模型（Gemini 2.5、DeepSeek V4 等）的思考也算在 `max_tokens` 里，产品各处默认的上限（纪要 6000）不够用，会只写一半，甚至只思考、不出正文：
+  在这个接口的“额外请求参数”里填 `{"max_tokens": 32000}`（会覆盖各处的上限）。输出被截断、或者一个字正文都没有时，会报错并说明原因，不保存半截内容。
+  开着思考时，模型往往要先想一两分钟才出第一个字，页面上会显示“正在思考，已 N 秒”。支持关掉思考的接口可以在额外请求参数里加 `"reasoning": {"enabled": false}`：
+  在一场 95 分钟的周会上，DeepSeek V4.1 Flash 关掉思考后纪要 30 秒写完（开着要 70–100 秒），要点不比开着少（比法见 [docs/improvements.md](improvements.md) 第二轮）。
+- 纪要提示词要求：数字照抄转写、不改成范围；每个时间戳单独一对方括号（写成 `[16:21, 17:31]` 的也能点，两个时间分别可点）；读音像热词、上下文说不通的，按热词写。
+- 可能认错的热词：转写页顶上列出读音和热词很像、又不是常用词的说法（比如“陈伟驰”→“长尾词”），点“改”加一条纠错规则，所有记录立即生效；不点就什么都不改。
+  只看 3–8 个汉字的热词（`vocab.suspects`，条件和检验见代码注释和 `tests/eval/hotword_suspects.py`）。
+- 推测姓名：转写页说话人一栏的“推测姓名”，让 AI 从转写里找自我介绍、“某某你说一下”之后开口的人这类直接线索。
+  模型给的原话会逐字核对（必须在它说的时间前后 90 秒内出现，且至少有一句是这个人自己说的），核对不上的丢掉；只给建议，勾选后才改名。会把转写文字发给所选的大模型接口。
 - 纪要生成时记下所用转写和笔记的指纹（`minutes.json` 的 `src_hash` / `notes_hash`）；之后改字、改说话人名、加纠错规则、重新转写或续录，
   纪要页会提示“可能已过期”，问答和当日汇总也不再引用这份旧纪要。当日汇总同理（新增记录或内容有改动时提示）。
 - 手动改过的段落不再套纠错规则（用户改成什么就是什么）。
@@ -170,10 +181,12 @@ docker run -d --name meeting-notes -p 127.0.0.1:8770:8770 -e MN_LOCAL_CLIENTS=17
 .venv/bin/python tests/smoke_e2e.py --modes "" --ambient-play "paplay -d mn {wav}"   # Linux：全天模式从 PulseAudio 采音（见下）
 .venv/bin/python tests/test_live_resume.py      # 断网补发、半开连接、抢录、换人续录、等不到重连、服务重启（自己起临时服务）
 .venv/bin/python tests/test_lan_security.py     # 伪造 Host、跨站请求/WebSocket、登录限速、no-store、开放端口（有 nmap 用 nmap）、证书名称限制（OpenSSL 验证）
-.venv/bin/python tests/test_diarize_cluster.py  # 说话人聚类后处理：噪声块归属、小簇并入、合并阈值、指定人数不变（几秒）
+.venv/bin/python tests/test_diarize_cluster.py  # 说话人聚类后处理：短录音的小簇门槛按比例放低；噪声块归属、小簇并入、合并阈值、指定人数不变（几秒）
 .venv/bin/python tests/test_split_level.py      # 音量归一、逐字时间、按说话人拆句、pyannote 说话人合并、区分说话人的设置（几秒）
 .venv/bin/python tests/test_diarize_offline.py  # pyannote 子进程：断网能跑完、一次网络连接都不发起、用法统计已关闭
 .venv/bin/python tests/test_cloud_asr_config.py # 云端识别没配置时不可用、不出现在选项里、不发请求
+.venv/bin/python tests/test_llm_stream.py       # 大模型输出被截断、只思考没正文时报错；额外请求参数覆盖 max_tokens（假接口，几秒）
+.venv/bin/python tests/test_vocab_names.py      # 可能认错的热词（多音字、词边界、常用词不报）；推测姓名的原话核对（几秒）
 node tests/audio/resampler.mjs                  # 浏览器端降采样：样本数、通带、抗混叠
 cd tests/mobile && npm install && npx playwright install chromium webkit
 MN_URL=http://127.0.0.1:8772 node sweep.mjs     # 320–1600px 每 10px × Chromium/WebKit：溢出、遮挡、点击区域、裁字、axe（WCAG 2.2 AA）

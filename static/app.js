@@ -358,7 +358,9 @@ function inline(s) {
   return esc(s)
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, (m, t) => `<a class="ts" data-ts="${t}">[${t}]</a>`);
+    // [12:30] 和 [12:30, 13:05]（有的模型把几处出处写在一个括号里）都拆成一个个能点的时间
+    .replace(/\[(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[,，、]\s*\d{1,2}:\d{2}(?::\d{2})?)*)\]/g,
+      (m, g) => g.split(/\s*[,，、]\s*/).map(t => `<a class="ts" data-ts="${t}">[${t}]</a>`).join(""));
 }
 function md(src) {
   const L = (src || "").replace(/\r/g, "").split("\n");
@@ -1657,14 +1659,25 @@ function tabTranscript() {
       <input id="tSearch" class="search" placeholder="搜索转写内容"><span class="muted small num" id="tCount"></span>
       <span class="grow"></span><label class="small muted follow"><input type="checkbox" id="follow" ${S.follow ? "checked" : ""}>跟随播放</label></div>
     ${isLive && ps.length ? `<div class="muted small tr-note">当前显示的是实时转写稿，精准转写完成后会自动替换并区分说话人。</div>` : ""}
+    ${!isLive && (d.suspects || []).length ? `<div class="banner small hw-sus"><span class="muted">可能认错的热词</span>${d.suspects.map((s, i) =>
+      `<span class="hw-item"><a class="ts" data-ts="${fmtTs(s.at[0])}" title="跳到第一处，听一下">${esc(s.text)}</a><span class="muted">→ ${esc(s.hotword)}${s.count > 1 ? ` · ${s.count} 处` : ""}</span>`
+      + (canEdit ? `<button class="sm" data-sus="${i}" title="加一条纠错规则：以后所有记录里的“${esc(s.text)}”都显示成“${esc(s.hotword)}”">改</button>` : "") + `</span>`).join("")}</div>` : ""}
     ${hasSpk ? `<div class="spk-chips">${spkIds.map(s => `<span class="chip" data-spk="${s}" title="点击改名；改成同一个名字即合并"><i class="dot" style="background:${spkColor(s)}"></i>${esc(spkName(s))}
-      <span class="muted num">${Math.round((durBy[spkName(s)] || 0) / tot * 100)}%</span></span>`).join("")}</div>` : ""}
+      <span class="muted num">${Math.round((durBy[spkName(s)] || 0) / tot * 100)}%</span></span>`).join("")}${!isLive && canEdit && spkIds.length > 1
+        ? `<button class="sm ghost" id="guessNames" title="让 AI 从转写里找自我介绍、点名后回应这类线索，推测说话人是谁；你确认后才改名">推测姓名</button>` : ""}</div>` : ""}
     <div class="tr-scroll" id="trScroll"><div id="paras" class="${hasSpk ? "" : "nospk"}">${rows
       || `<div class="empty">${["queued", "transcribing"].includes(d.meta.status) ? "转写中…" : "没有识别到语音内容"}</div>`}</div></div>`;
   if (pane) $("#trScroll").scrollTop = keep;
   hoverFill($("#paras"), ".para");
   $("#follow").onchange = e => { S.follow = e.target.checked; };
   $$("[data-spk]", root).forEach(el => el.onclick = () => renameSpeaker(+el.dataset.spk));
+  $("#guessNames", root) && ($("#guessNames", root).onclick = () => guessNames());
+  $$("[data-sus]", root).forEach(el => el.onclick = async () => {
+    const s = d.suspects[+el.dataset.sus]; el.disabled = true;
+    try { await api("/api/vocab/fix", { method: "POST", body: { from: s.text, to: s.hotword } }); }
+    catch (e) { el.disabled = false; return toast("没改成：" + e.message, 5000); }
+    toast(`已加纠错规则：${s.text} → ${s.hotword}`); await showMeeting(d.meta.id);
+  });
   $$(".pedit", root).forEach(el => el.onclick = () => editPara(+el.dataset.i));
   $$(".para .txt", root).forEach(el => { if (canEdit) el.ondblclick = () => editPara(+el.closest(".para").dataset.i); });
   $("#tSearch").oninput = e => {
@@ -1768,6 +1781,34 @@ function scrollToPara(el, center = false) {
   const cr = sc.getBoundingClientRect(), r = el.getBoundingClientRect();
   if (!center && r.top >= cr.top + (pane ? 8 : 120) && r.bottom <= cr.bottom - 40) return;
   sc.scrollTo({ top: sc.scrollTop + (r.top - cr.top) - (sc.clientHeight - r.height) / 2, behavior: "smooth" });
+}
+// 推测姓名：服务端核对过摘句的候选，用户勾选、可改名字后才保存
+async function guessNames() {
+  const d = S.cur, id = d.meta.id;
+  const dlg = modal(`<h2>推测说话人姓名</h2><p class="muted" id="gnSt">AI 正在从转写里找自我介绍、点名后回应这类线索…</p><div id="gnBody"></div>`);
+  let r;
+  try { r = await api(`/api/meetings/${id}/speaker-names`, { method: "POST", body: {} }); }
+  catch (e) { $("#gnSt", dlg).textContent = "没推测出来：" + e.message; $("#gnBody", dlg).innerHTML = `<div class="row" style="justify-content:flex-end"><button onclick="closeModal()">关闭</button></div>`; return; }
+  if (!S.cur || S.cur.meta.id !== id) return;
+  const cs = r.candidates || [];
+  $("#gnSt", dlg).innerHTML = cs.length
+    ? `下面是有原话为证的推测（${esc(r.provider)}，${r.cost}s）。只是推测：先点时间听一下，确认后勾选再改名。`
+    : `转写里没有找到能确定身份的直接线索（自我介绍、点名后回应等），没有可推荐的名字。`;
+  $("#gnBody", dlg).innerHTML = (cs.length ? `<div class="gn-list">${cs.map((c, i) => `<div class="gn-row">
+      <label class="gn-head"><input type="checkbox" data-gi="${i}"> ${esc(spkName(c.spk))} →
+        <input class="gn-name" data-gn="${i}" value="${esc(c.name)}"> <span class="muted small">把握：${esc(c.confidence)}</span></label>
+      <div class="muted small">${esc(c.reason)}</div>
+      ${c.evidence.map(e => `<div class="small gn-ev"><a class="ts" data-ts="${esc(e.ts)}">[${esc(e.ts)}]</a> ${esc(spkName(e.spk))}：${esc(e.quote)}</div>`).join("")}</div>`).join("")}</div>` : "")
+    + `<div class="row" style="justify-content:flex-end;margin-top:12px"><button onclick="closeModal()">${cs.length ? "取消" : "关闭"}</button>${cs.length ? `<button class="pri" id="gnOk">按勾选的改名</button>` : ""}</div>`;
+  const ok = $("#gnOk", dlg); if (!ok) return;
+  ok.onclick = async () => {
+    const sp = { ...(S.cur.meta.speakers || {}) }; let n = 0;
+    $$("[data-gi]", dlg).forEach(cb => { if (!cb.checked) return; const c = cs[+cb.dataset.gi], v = $(`[data-gn="${cb.dataset.gi}"]`, dlg).value.trim(); if (v) { sp[String(c.spk)] = v; n++; } });
+    if (!n) return toast("没有勾选要改名的说话人");
+    try { S.cur.meta = await api(`/api/meetings/${id}`, { method: "PATCH", body: { speakers: sp } }); }
+    catch (e) { return toast("改名没保存上：" + e.message, 5000); }
+    closeModal(); toast(`已改名 ${n} 位说话人`); await showMeeting(id);
+  };
 }
 function renameSpeaker(spk) {
   const cur = spkName(spk);

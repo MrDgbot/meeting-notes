@@ -364,6 +364,14 @@ h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; }
 .tr-tool .search { flex: 0 1 240px; min-width: 120px; height: 32px; margin: 0; padding-top: 0; padding-bottom: 0; }
 .tr-tool .follow { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; white-space: nowrap; }
 .tr-note { margin: -2px 0 10px; }
+.hw-sus { flex-wrap: wrap; gap: 6px 14px; padding: 8px 12px; margin-bottom: 10px; }
+.hw-item { display: inline-flex; align-items: center; gap: 6px; }
+.hw-item .ts { font-weight: 600; }
+.gn-list { display: grid; gap: 12px; max-height: 55vh; overflow: auto; }
+.gn-row { display: grid; gap: 4px; }
+.gn-head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.gn-name { width: 9em; height: 30px; margin: 0; }
+.gn-ev { padding-left: 24px; }
 /* 单栏时搜索条吸附在播放器下面，往下翻也能随时搜 */
 .wrap:not(.split) .tr-tool { position: sticky; top: 0; z-index: 4; margin: -6px -14px 6px; padding: 6px 14px;
   background: rgba(245, 245, 245, .84); -webkit-backdrop-filter: saturate(1.6) blur(14px); backdrop-filter: saturate(1.6) blur(14px); }

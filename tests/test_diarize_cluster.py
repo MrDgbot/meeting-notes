@@ -156,6 +156,22 @@ def test_oracle_num_spk_unchanged():
     assert len({t[2] for t in turns}) == 2
 
 
+
+def test_short_recording_min_sec():
+    """短录音的小簇门槛按语音时长的 10% 放低，长录音仍是 30 秒；_diarize 把它传给 cluster_speakers。"""
+    assert asr_engine.min_cluster_sec([[0, 600_000]]) == asr_engine.SPK_MIN_SEC  # 10 分钟语音
+    assert abs(asr_engine.min_cluster_sec([[0, 60_000], [70_000, 100_000]]) - 9.0) < 1e-6  # 90 秒语音 → 9 秒
+    assert asr_engine.min_cluster_sec([]) == 0
+    X = np.random.default_rng(0).normal(size=(200, 192)).astype(np.float32)
+    x = np.zeros(16000 * 40, dtype=np.float32)
+    eng = asr_engine.Engine.__new__(asr_engine.Engine)
+    eng.last_info, eng.full, eng.full_lock = {}, FakeFull(X), threading.Lock()
+    with mock.patch.object(asr_engine, "diarizer_mode", return_value="campp"), \
+            mock.patch.object(asr_engine, "cluster_speakers", wraps=asr_engine.cluster_speakers) as cs:
+        eng._diarize(x, [[0, 40_000]], num_spk=0)
+    assert abs(cs.call_args.kwargs["min_sec"] - 4.0) < 1e-6, cs.call_args
+
+
 if __name__ == "__main__":
     fails = 0
     for k, f in list(globals().items()):

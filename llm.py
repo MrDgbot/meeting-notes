@@ -1,5 +1,6 @@
 """OpenAI 兼容接口的流式调用（百炼 / DeepSeek / 本地 llama-server 通用）。"""
 import json
+import time
 from typing import AsyncIterator
 
 import httpx
@@ -50,8 +51,22 @@ class _ThinkFilter:
         return out
 
 
-async def chat_stream(p: dict, messages: list[dict], temperature: float = 0.3,
-                      max_tokens: int = 6000) -> AsyncIterator[str]:
+THINK_EVERY = 2.0  # 还在思考时，每隔几秒报一次进度
+
+
+async def chat_stream(p: dict, messages: list[dict], **kw) -> AsyncIterator[str]:
+    """只要正文，见 chat_events。"""
+    async for kind, v in chat_events(p, messages, **kw):
+        if kind == "text":
+            yield v
+
+
+async def chat_events(p: dict, messages: list[dict], temperature: float = 0.3,
+                      max_tokens: int = 6000) -> AsyncIterator[tuple[str, object]]:
+    """流式返回 ("text", 正文片段)；模型在思考、还没出正文时，每隔约 THINK_EVERY 秒给一次 ("think", 已等的秒数)，
+    让页面不至于一分多钟没有动静（DeepSeek V4 实测先想 50–90 秒才出第一个字）。
+    输出被长度上限截断、或者一个字正文都没有时抛 LLMError，不把半截内容当成功：
+    推理模型（Gemini 2.5、DeepSeek V4 等）的思考也算在 max_tokens 里，上限小了会只写一半，甚至只思考不出正文。"""
     if not p.get("api_key"):
         raise LLMError(f"「{p['name']}」还没有配置 API Key，请在右上角“设置”里填写")
     body = {"model": p["model"], "messages": messages, "stream": True,
@@ -60,6 +75,8 @@ async def chat_stream(p: dict, messages: list[dict], temperature: float = 0.3,
     url = p["base_url"].rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {p['api_key']}", "Content-Type": "application/json"}
     flt = _ThinkFilter()
+    fin, got = "", False
+    t0 = last = time.monotonic()
     timeout = httpx.Timeout(connect=10, read=600, write=60, pool=10)
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
@@ -80,14 +97,28 @@ async def chat_stream(p: dict, messages: list[dict], temperature: float = 0.3,
                     if j.get("error"):
                         raise LLMError(str(j["error"])[:500])
                     for ch in j.get("choices") or []:
-                        delta = (ch.get("delta") or {}).get("content") or ""
+                        fin = str(ch.get("finish_reason") or fin)
+                        dd = ch.get("delta") or {}
+                        delta = dd.get("content") or ""
+                        out = flt.feed(delta) if delta else ""
                         if delta:
-                            out = flt.feed(delta)
                             if out:
-                                yield out
+                                got = True
+                                yield "text", out
+                        thinking = (not got) and (dd.get("reasoning") or dd.get("reasoning_content") or (delta and not out))
+                        if thinking and time.monotonic() - last >= THINK_EVERY:
+                            last = time.monotonic()
+                            yield "think", round(last - t0)
         tail = flt.flush()
         if tail:
-            yield tail
+            got = True
+            yield "text", tail
+        hint = (f"推理模型的思考也算在上限里：在“设置 · AI 纪要模型”里给「{p['name']}」的额外请求参数填 "
+                '{"max_tokens": 32000}（不同模型的上限不同，报错就调小）')
+        if fin.lower() in ("length", "max_tokens"):
+            raise LLMError(f"「{p['name']}」的输出达到长度上限（max_tokens {body.get('max_tokens')}）被截断了，内容不完整，没有保存。{hint}")
+        if not got:
+            raise LLMError(f"「{p['name']}」没有返回正文（可能思考就用完了 max_tokens {body.get('max_tokens')}）。{hint}")
     except httpx.ConnectError as e:
         local = any(h in p["base_url"] for h in ("127.0.0.1", "localhost"))
         raise LLMError(f"连不上模型服务 {p['base_url']}：{e}。"

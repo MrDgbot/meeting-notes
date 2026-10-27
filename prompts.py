@@ -5,12 +5,13 @@ from asr_engine import fmt_ts
 SYSTEM = """你是专业的会议纪要助手，根据会议转写稿撰写结构化的中文会议纪要。
 规则：
 1. 只依据转写稿和参会者笔记，不编造未出现的信息；不确定的写“待确认”。
-2. 转写由语音识别生成，可能有同音错字，请结合上下文纠正明显错误；专有名词以“热词”为准。
+2. 转写由语音识别生成，可能有同音错字，请结合上下文纠正明显错误；专有名词以“热词”为准：转写里读音和某个热词相近、放在上下文里又说不通的说法（常见的是像人名一样的生僻组合），多半是这个热词认错了，按热词写。
 3. 发言人用转写中的名字（如“说话人1”或真实姓名）。
-4. 引用出处时用 [mm:ss] 或 [h:mm:ss] 格式的时间戳，与转写稿一致。
+4. 引用出处时用 [mm:ss] 或 [h:mm:ss] 格式的时间戳，与转写稿一致；每个时间单独一对方括号，如 [01:31][05:00]，不要把几个时间写在一对括号里。
 5. 待办事项必须写清楚：事项、负责人、截止时间；未明确的写“待定”。
 6. 直接输出 Markdown，不要用代码块包裹，不要输出与纪要无关的话。
-7. 第一行输出“# 标题”，标题为根据内容拟定的简洁会议名称（不超过 20 字）。"""
+7. 第一行输出“# 标题”，标题为根据内容拟定的简洁会议名称（不超过 20 字）。
+8. 数字、金额、百分比、日期照抄转写里的写法，不要自己拆开、合并、换算或改成范围；转写里看起来不合理的数字，照抄后标“待确认”。"""
 
 TEMPLATES = {
     "general": {
@@ -150,6 +151,70 @@ def minutes_messages(meta, notes, template_id, body_text, partial=False):
 
 QA_SYSTEM = """你是会议助理，根据会议转写稿（及已生成的纪要）回答用户关于这场会议的问题。
 只依据会议内容回答；会议中没有提到的，直接说明“会议中没有提到”。回答简洁，必要时引用 [时间戳] 和发言人。用中文 Markdown 回答。"""
+
+
+# ---------- 推测发言人姓名 ----------
+SPK_NAME_PROMPT = """下面是一场会议的转写稿，每行是 [时间] 说话人：内容。说话人是机器按声音分的，只有编号。
+请根据转写里的直接线索，推测哪个编号可能是谁。可以用的线索：
+- 自我介绍（“我是……”）；
+- 别人点名后，紧接着回应的那个编号（如“小李你说一下”之后开口的人）；
+- 别人用名字称呼正在和他对话的人，或明确说某件事是某人负责、随后这个编号在汇报这件事。
+只写有直接证据的，不要凭职位、语气、话题去猜；同一个名字只能给一个编号，拿不准就不写。
+转写有同音错字，名字可能写错（以热词为准）。
+
+只输出 JSON，不要别的文字，格式：
+{{"candidates": [{{"spk": 编号数字, "name": "名字", "confidence": "高|中|低", "reason": "一句话说明怎么推出来的",
+  "evidence": [{{"ts": "转写里的时间，如 12:30 或 1:02:03", "quote": "从转写原文里逐字摘一小段（10~30 字）"}}]}}]}}
+没有任何可靠线索时输出 {{"candidates": []}}。
+
+{head}
+转写稿：
+{text}"""
+
+
+def _norm(s: str) -> str:
+    import re
+    return re.sub(r"[\W_]+", "", s or "").lower()
+
+
+def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) -> list[dict]:
+    """核对模型给的证据：摘句必须在它说的时间前后 window_ms 内的转写里逐字出现，否则丢掉这条证据；
+    一条证据都核对不上的候选不要；证据里至少要有一句是这个说话人自己说的（自我介绍、被点名后的回应），
+    只有别人提到这个名字的不算（实测模型会把“跟某某说的”这种转述当成线索）。同一个编号或同一个名字出现多次时，只留证据多的那个。"""
+    import re
+    spks = {p["spk"] for p in paras}
+    out = []
+    for c in raw if isinstance(raw, list) else []:
+        try:
+            spk = int(c.get("spk")) - 1  # 模型看到的是“说话人N”，N 从 1 开始
+        except (TypeError, ValueError):
+            continue
+        name = str(c.get("name") or "").strip()[:20]
+        if spk not in spks or not name or re.fullmatch(r"说话人\s*\d+", name):
+            continue
+        ev = []
+        for e in (c.get("evidence") or [])[:5]:
+            m = re.fullmatch(r"\s*(?:(\d+):)?(\d{1,2}):(\d{2})\s*", str(e.get("ts") or ""))
+            q = _norm(e.get("quote"))
+            if not m or len(q) < 4:
+                continue
+            ms = ((int(m.group(1) or 0) * 60 + int(m.group(2))) * 60 + int(m.group(3))) * 1000
+            near = [p for p in paras if p["start"] - window_ms <= ms <= p["end"] + window_ms]
+            hit = next((p for p in near if q in _norm(p["text"])), None)
+            if hit:
+                ev.append({"ts": fmt_ts(hit["start"]), "quote": str(e["quote"]).strip()[:80], "spk": hit["spk"]})
+        if ev and any(e["spk"] == spk for e in ev):
+            conf = c.get("confidence") if c.get("confidence") in ("高", "中", "低") else "低"
+            out.append({"spk": spk, "name": name, "confidence": conf, "reason": str(c.get("reason") or "")[:120], "evidence": ev})
+    out.sort(key=lambda c: -len(c["evidence"]))
+    seen_spk, seen_name, res = set(), set(), []
+    for c in out:
+        if c["spk"] in seen_spk or c["name"] in seen_name:
+            continue
+        seen_spk.add(c["spk"])
+        seen_name.add(c["name"])
+        res.append(c)
+    return sorted(res, key=lambda c: c["spk"])
 
 
 # ---------- 每日汇总 ----------

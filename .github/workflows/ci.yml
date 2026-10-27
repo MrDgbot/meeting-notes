@@ -51,6 +51,8 @@ jobs:
           uv run --no-sync python tests/test_cloud_asr_config.py
           uv run --no-sync python tests/test_diarize_cluster.py
           uv run --no-sync python tests/test_split_level.py
+          uv run --no-sync python tests/test_llm_stream.py
+          uv run --no-sync python tests/test_vocab_names.py
 
       - name: 取缓存的语音模型
         id: models

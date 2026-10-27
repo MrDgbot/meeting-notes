@@ -30,7 +30,7 @@ from ambient import (SENS, Ambient, list_devices, purge_candidates, purge_old_au
                      sens_thres)
 from asr_engine import (ASR_MODELS, DEVICE, DIARIZERS, Engine, asr_mode, diarizer_mode, duration_of, fmt_ts, make_mp3,
                         pcm_to_wav, to_wav16k)
-from llm import LLMError, chat, chat_stream
+from llm import LLMError, chat, chat_events, chat_stream
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -299,6 +299,7 @@ def get_meeting(mid: str):
         "segmap": store.load(mid, "segmap.json"),
         "minutes": mn,
         "minutes_stale": _minutes_stale(mid, meta, mn),
+        "suspects": _suspects(mid, meta),
         "notes": (d / "notes.md").read_text("utf-8") if (d / "notes.md").exists() else "",
         "qa": store.load(mid, "qa.json", []),
         # 只剩原始 pcm（转写前就出错）也算有录音：能播放（按需转 wav）、能重新转写
@@ -314,6 +315,26 @@ def _fixed_transcript(mid: str) -> dict | None:
     if tr and tr.get("paragraphs"):
         tr["paragraphs"] = vocab.apply_paras(tr["paragraphs"])
     return tr
+
+
+_suspect_cache: dict = {}
+
+
+def _suspects(mid: str, meta: dict) -> list[dict]:
+    """转写里疑似认错的热词（只给建议）。页面会反复读会议详情，按转写、词库、本场热词有没有变来缓存。"""
+    f, v = store.mdir(mid) / "transcript.json", vocab.PATH
+    if not f.exists():
+        return []
+    key = (f.stat().st_mtime, v.stat().st_mtime if v.exists() else 0, meta.get("hotword", ""))
+    hit = _suspect_cache.get(mid)
+    if not hit or hit[0] != key:
+        try:
+            res = vocab.suspects((_fixed_transcript(mid) or {}).get("paragraphs") or [], meta.get("hotword", ""))
+        except Exception:  # noqa: BLE001  建议功能出错不能影响打开会议
+            log.exception("suspects")
+            res = []
+        hit = _suspect_cache[mid] = (key, res)
+    return hit[1]
 
 
 @app.put("/api/meetings/{mid}/paragraphs/{i}")
@@ -772,7 +793,10 @@ async def gen_minutes(mid: str, body: dict = Body(default={})):
                     ], max_tokens=3000))
                 msgs = prompts.minutes_messages(meta, notes, template, "\n\n".join(parts), partial=True)
             yield _ndjson({"type": "status", "msg": f"{prov['name']} 生成中…"})
-            async for delta in chat_stream(prov, msgs):
+            async for kind, delta in chat_events(prov, msgs):
+                if kind == "think":
+                    yield _ndjson({"type": "status", "msg": f"{prov['name']} 正在思考，已 {delta} 秒（推理模型要先想一会儿才开始写）"})
+                    continue
                 out += delta
                 yield _ndjson({"type": "delta", "text": delta})
             out = out.strip()
@@ -799,6 +823,35 @@ async def gen_minutes(mid: str, body: dict = Body(default={})):
 def _bigrams(s: str) -> set:
     s = re.sub(r"\W", "", s)
     return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+@app.post("/api/meetings/{mid}/speaker-names")
+async def guess_speaker_names(mid: str, body: dict = Body(default={})):
+    """推测各说话人是谁：模型从转写里找自我介绍、点名后回应这类直接线索，摘句逐字核对过才返回。只给建议，改不改名由用户决定。"""
+    meta = _meta_or_404(mid)
+    prov = _prov(body.get("provider"))
+    paras = _paras(mid)
+    if not paras or len({p["spk"] for p in paras}) < 2:
+        raise HTTPException(400, "还没有区分说话人的转写")
+    plain = {**meta, "speakers": {}}  # 一律用“说话人N”，模型给的编号才对得上
+    lines = prompts.transcript_lines(plain, paras)
+    hw = vocab.hotwords(meta.get("hotword", ""))
+    head = f"热词（专有名词正确写法）：{hw}\n" if hw else ""
+    budget = int(prov.get("max_input_chars") or 60000)
+    t0, raw = time.time(), []
+    try:
+        for ch in prompts.chunk_lines(lines, int(budget * 0.8)):
+            out = await chat(prov, [{"role": "user", "content": prompts.SPK_NAME_PROMPT.format(head=head, text="\n".join(ch))}],
+                             temperature=0.1, max_tokens=4000)
+            m = re.search(r"\{.*\}", out, re.S)
+            try:
+                raw += (json.loads(m.group(0)) if m else {}).get("candidates") or []
+            except json.JSONDecodeError:
+                log.warning("speaker-names: 模型没按 JSON 输出：%s", out[:200])
+    except LLMError as e:
+        raise HTTPException(502, str(e)) from e
+    return {"candidates": prompts.check_name_candidates(raw, paras), "raw_count": len(raw),
+            "provider": prov["name"], "cost": round(time.time() - t0, 1)}
 
 
 @app.post("/api/meetings/{mid}/ask")
@@ -1266,7 +1319,10 @@ async def daily_gen(date: str, prov: dict):
         label = f"{d.month}月{d.day}日 周{'一二三四五六日'[d.weekday()]}"
         msgs = prompts.daily_messages(label, vocab.hotwords(), blocks)
         yield _ndjson({"type": "status", "msg": f"{prov['name']} 生成中…"})
-        async for delta in chat_stream(prov, msgs, max_tokens=4000):
+        async for kind, delta in chat_events(prov, msgs, max_tokens=4000):
+            if kind == "think":
+                yield _ndjson({"type": "status", "msg": f"{prov['name']} 正在思考，已 {delta} 秒"})
+                continue
             out += delta
             yield _ndjson({"type": "delta", "text": delta})
         rec = {"markdown": out.strip(), "provider": prov["name"], "model": prov["model"],

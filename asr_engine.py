@@ -25,6 +25,9 @@ _cb.SpectralCluster.cluster_embs = lambda self, emb, k: _cb.k_means(emb, k, rand
 # 不指定人数时的聚类后处理
 SV_STEP = 0.75        # 声纹小块的步长（秒），sv_chunk 的默认值
 SPK_MIN_SEC = 30      # 总时长不到这么多秒的说话人，逐块并进最近的人
+# 短录音按比例放低上面的门槛：门槛 = min(SPK_MIN_SEC, 语音总时长 × SPK_MIN_FRAC)。不然一两分钟的录音里除了说得最多的人谁都凑不够 30 秒，
+# 全被并成一个人。语音超过 300 秒时和原来完全一样。选法见 docs/improvements.md 第二轮“短录音的人数”。
+SPK_MIN_FRAC = 0.10
 SPK_MERGE_THR = 0.72  # 两个说话人声纹中心的余弦相似度超过它就合并（FunASR 默认 0.78）
 # 一句话里换了人、换过去的人连续说够这么多毫秒才切开；0 = 不切，整句归一人（选法见 docs/improvements.md 第 2 项）
 SPLIT_MIN_MS = 1000
@@ -42,6 +45,11 @@ PYA_MERGE_THR = 0.78
 
 def _unit(v: np.ndarray) -> np.ndarray:
     return v / np.linalg.norm(v, axis=-1, keepdims=True)
+
+
+def min_cluster_sec(segs: list) -> float:
+    """小簇门槛（秒）：segs 是整段录音的语音段 [开始ms, 结束ms]。"""
+    return min(SPK_MIN_SEC, SPK_MIN_FRAC * sum(e - s for s, e in segs) / 1000)
 
 
 def _assign_nearest(labels: np.ndarray, X: np.ndarray, idx: np.ndarray, pool: np.ndarray) -> None:
@@ -634,7 +642,7 @@ class Engine:
         if num_spk and num_spk > 0:  # 用户指定了人数：照旧交给 FunASR
             labels = self.full.cb_model(X, oracle_num=int(num_spk))
         else:
-            labels = cluster_speakers(X, self.full.cb_model)
+            labels = cluster_speakers(X, self.full.cb_model, min_sec=min_cluster_sec(segs))
         return [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
 
     def _spk_embeddings(self, x: np.ndarray, segs: list) -> tuple[list, np.ndarray]:
