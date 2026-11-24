@@ -131,9 +131,42 @@ def chunk_lines(lines: list[str], max_chars: int) -> list[list[str]]:
 MAP_PROMPT = """下面是一场长会议转写稿的第 {i}/{n} 部分。请提炼这一部分的详细要点笔记，供之后合并成完整纪要：
 - 按时间顺序列出议题和讨论要点，保留关键数字、结论、分歧，注明发言人和 [时间戳]
 - 单独列出这一部分出现的决定和待办（含负责人、截止时间）
-只输出要点笔记。
+只输出要点笔记。决定和待办旁边用引号留下转写原话（不要改写），方便之后核对期限和负责人。
 
 {text}"""
+
+
+JSON_SYSTEM = """你是专业的会议纪要助手。只依据转写稿和笔记，不编造。
+转写由语音识别生成，可能有同音错字；专有名词以热词为准。
+待办的负责人、截止时间必须能在转写原话里指出来。原话没说清楚的，写“待定”，不要按表格习惯补成“下周”或随便填一个日期。
+数字、金额、百分比、日期照抄转写，不要改成范围。
+只输出一个 JSON 对象，不要 Markdown，不要代码块，不要解释。"""
+
+
+def minutes_json_messages(meta, notes, template_id, body_text, partial=False, marks_text=""):
+    """让模型先交结构化结果，期限和出处由代码核对后再渲染。"""
+    t = TEMPLATES.get(template_id) or TEMPLATES["general"]
+    kind = "各部分要点笔记（按时间顺序，引号里是转写原话）" if partial else "转写稿"
+    marks_part = ("\n" + marks_text.strip() + "\n") if (marks_text or "").strip() else ""
+    user = f"""{context_header(meta, notes)}
+
+纪要模板：{t['name']}
+模板要求的小节写进 sections。概要只写在 summary，不要在 sections 里再写「会议概要」或模板的概要标题。待办不要写进 sections，只放 actions：
+{t['prompt']}
+
+只输出 JSON，结构如下（没有的数组留空，字符串没有就写空）：
+{{"title": "不超过20字的会议名", "summary": "3到5句概要",
+  "sections": [{{"heading": "小节标题", "body": "这一节的 Markdown，时间用单独的 [mm:ss]"}}],
+  "actions": [{{"task": "事项", "owner": "转写里出现的姓名，没有就写待定", "due": "转写原话里的期限，没有就写待定",
+    "time": "mm:ss", "quote": "从转写逐字摘8到40字，必须能证明负责人和期限"}}],
+  "highlights": [{{"text": "一句话要点，不超过40字，写结论或决定，不要写“讨论了某某”", "start": "mm:ss", "end": "mm:ss",
+    "quote": "从转写逐字摘8到40字，必须出现在 start 到 end 之间"}}],
+  "keywords": ["5到10个关键词"]}}
+highlights 是整场会议最值得记住的 5 到 10 条要点，按时间顺序；start、end 是这条要点在转写里的来源时间范围，不要超过 3 分钟。
+{marks_part}
+{kind}：
+{body_text}"""
+    return [{"role": "system", "content": JSON_SYSTEM}, {"role": "user", "content": user}]
 
 
 def minutes_messages(meta, notes, template_id, body_text, partial=False):
@@ -183,8 +216,11 @@ def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) 
     只有别人提到这个名字的不算（实测模型会把“跟某某说的”这种转述当成线索）。同一个编号或同一个名字出现多次时，只留证据多的那个。"""
     import re
     spks = {p["spk"] for p in paras}
+    norm_paras = [_norm(p.get("text") or "") for p in paras]
     out = []
     for c in raw if isinstance(raw, list) else []:
+        if not isinstance(c, dict):
+            continue
         try:
             spk = int(c.get("spk")) - 1  # 模型看到的是“说话人N”，N 从 1 开始
         except (TypeError, ValueError):
@@ -193,14 +229,20 @@ def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) 
         if spk not in spks or not name or re.fullmatch(r"说话人\s*\d+", name):
             continue
         ev = []
-        for e in (c.get("evidence") or [])[:5]:
+        ev_list = c.get("evidence")
+        for e in (ev_list if isinstance(ev_list, list) else [])[:5]:
+            if not isinstance(e, dict):
+                continue
             m = re.fullmatch(r"\s*(?:(\d+):)?(\d{1,2}):(\d{2})\s*", str(e.get("ts") or ""))
             q = _norm(e.get("quote"))
             if not m or len(q) < 4:
                 continue
             ms = ((int(m.group(1) or 0) * 60 + int(m.group(2))) * 60 + int(m.group(3))) * 1000
-            near = [p for p in paras if p["start"] - window_ms <= ms <= p["end"] + window_ms]
-            hit = next((p for p in near if q in _norm(p["text"])), None)
+            hit = None
+            for idx, p in enumerate(paras):
+                if p["start"] - window_ms <= ms <= p["end"] + window_ms and q in norm_paras[idx]:
+                    hit = p
+                    break
             if hit:
                 ev.append({"ts": fmt_ts(hit["start"]), "quote": str(e["quote"]).strip()[:80], "spk": hit["spk"]})
         if ev and any(e["spk"] == spk for e in ev):

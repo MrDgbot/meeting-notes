@@ -8,6 +8,7 @@ import json
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,6 +34,18 @@ STREAMS = {
 }
 SEEN = []
 
+fails = 0
+_STANDALONE = False
+
+
+def check(cond, msg):
+    global fails
+    print(("ok   " if cond else "FAIL ") + str(msg))
+    if not cond:
+        fails += 1
+        if not _STANDALONE:
+            raise AssertionError(str(msg))
+
 
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -53,67 +66,89 @@ class H(BaseHTTPRequestHandler):
         pass
 
 
-srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-URL = f"http://127.0.0.1:{srv.server_address[1]}/v1"
-fails = 0
+@contextmanager
+def _mock_server():
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
-def check(cond, msg):
-    global fails
-    print(("ok   " if cond else "FAIL ") + msg)
-    fails += not cond
+def prov(url, model, extra=None):
+    return {"name": "测试接口", "base_url": url, "api_key": "k", "model": model, "extra_body": extra or {}}
 
 
-def prov(model, extra=None):
-    return {"name": "测试接口", "base_url": URL, "api_key": "k", "model": model, "extra_body": extra or {}}
-
-
-async def collect(model, extra=None, **kw):
+async def collect(url, model, extra=None, **kw):
     out = []
     try:
-        async for d in chat_stream(prov(model, extra), [{"role": "user", "content": "hi"}], **kw):
+        async for d in chat_stream(prov(url, model, extra), [{"role": "user", "content": "hi"}], **kw):
             out.append(d)
         return "".join(out), None
     except LLMError as e:
         return "".join(out), str(e)
 
 
-async def main():
-    text, err = await collect("ok")
+async def _run_stream_cases(url):
+    text, err = await collect(url, "ok")
     check(text == "你好" and err is None, f"正常结束：返回正文，不带思考过程（{text!r}）")
-    text, err = await collect("cut", max_tokens=6000)
+    text, err = await collect(url, "cut", max_tokens=6000)
     check(err is not None and "截断" in err and "6000" in err and "max_tokens" in err, f"finish_reason=length：报错并说明上限（{err}）")
     check(text.startswith("# 纪要"), "截断前已经流出去的内容照常流出（页面上能看到写到了哪里）")
-    _, err = await collect("cut-gemini")
+    _, err = await collect(url, "cut-gemini")
     check(err is not None and "截断" in err, "finish_reason=max_tokens 也算截断")
-    _, err = await collect("think-only")
+    _, err = await collect(url, "think-only")
     check(err is not None and "截断" in err, "只思考、没出正文就到上限：报错")
-    text, err = await collect("empty-stop")
+    text, err = await collect(url, "empty-stop")
     check(err is not None and "没有返回正文" in err and text == "", f"正常结束但一个字正文都没有：报错（{err}）")
-    _, err = await collect("think-tag")
+    _, err = await collect(url, "think-tag")
     check(err is not None, "正文全在 <think> 里就被截断：报错")
     SEEN.clear()
-    _, err = await collect("ok", extra={"max_tokens": 32000}, max_tokens=20)
+    _, err = await collect(url, "ok", extra={"max_tokens": 32000}, max_tokens=20)
     check(err is None and SEEN[-1]["max_tokens"] == 32000, "接口的额外请求参数能覆盖调用处的 max_tokens（推理模型靠它放宽上限）")
     try:
-        await chat(prov("cut"), [{"role": "user", "content": "hi"}])
+        await chat(prov(url, "cut"), [{"role": "user", "content": "hi"}])
         check(False, "chat()：截断时也报错")
     except LLMError:
         check(True, "chat()（分段提炼、测试接口用的）截断时也报错，不拿半截内容去拼纪要")
+
+
+async def _run_think_progress_cases(url):
+    orig_think_every = llm.THINK_EVERY
     llm.THINK_EVERY = 0.2
-    for model in ("slow-think", "slow-tag"):
-        ev = [e async for e in chat_events(prov(model), [{"role": "user", "content": "hi"}])]
-        kinds = [k for k, _ in ev]
-        text = "".join(v for k, v in ev if k == "text")
-        check("think" in kinds and kinds.index("think") < kinds.index("text") and text == "答案",
-              f"{model}：没出正文前报思考进度，出了正文后不再报（{kinds}）")
-        check([k for k in kinds[kinds.index("text"):]] == ["text"] * kinds[kinds.index("text"):].count("text"), f"{model}：正文开始后只有正文")
-    text, err = await collect("slow-think")
-    check(text == "答案" and err is None, "chat_stream 不受影响：只给正文")
+    try:
+        for model in ("slow-think", "slow-tag"):
+            ev = [e async for e in chat_events(prov(url, model), [{"role": "user", "content": "hi"}])]
+            kinds = [k for k, _ in ev]
+            text = "".join(v for k, v in ev if k == "text")
+            check("think" in kinds and kinds.index("think") < kinds.index("text") and text == "答案",
+                  f"{model}：没出正文前报思考进度，出了正文后不再报（{kinds}）")
+            check([k for k in kinds[kinds.index("text"):]] == ["text"] * kinds[kinds.index("text"):].count("text"),
+                  f"{model}：正文开始后只有正文")
+        text, err = await collect(url, "slow-think")
+        check(text == "答案" and err is None, "chat_stream 不受影响：只给正文")
+    finally:
+        llm.THINK_EVERY = orig_think_every
 
 
-asyncio.run(main())
-srv.shutdown()
-print("全部通过" if not fails else f"{fails} 项失败")
-sys.exit(1 if fails else 0)
+def test_llm_stream_truncation_and_empty():
+    with _mock_server() as url:
+        asyncio.run(_run_stream_cases(url))
+
+
+def test_llm_stream_think_progress():
+    with _mock_server() as url:
+        asyncio.run(_run_think_progress_cases(url))
+
+
+if __name__ == "__main__":
+    _STANDALONE = True
+    fails = 0
+    with _mock_server() as url:
+        asyncio.run(_run_stream_cases(url))
+        asyncio.run(_run_think_progress_cases(url))
+    print("全部通过" if not fails else f"{fails} 项失败")
+    sys.exit(1 if fails else 0)

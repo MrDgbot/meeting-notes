@@ -26,12 +26,16 @@ from test_live_resume import Server, free_port  # noqa: E402
 
 PW = "test-pass-1"
 fails = 0
+_STANDALONE = False
 
 
 def check(ok, msg):
     global fails
     print(f"{'通过' if ok else '失败'}  {msg}")
-    fails += not ok
+    if not ok:
+        fails += 1
+        if not _STANDALONE:
+            raise AssertionError(str(msg))
 
 
 def req(host, port, method, path, headers=None, body=None, tls=False):
@@ -88,6 +92,8 @@ def make_leaf(ca_key, ca, dns=(), ips=()):
 
 
 async def main():
+    global fails
+    fails = 0
     tmp = Path(tempfile.mkdtemp(prefix="mn-sec-"))
     (tmp / "meetings").mkdir()
     srv = Server(tmp)
@@ -126,6 +132,8 @@ async def main():
         check(st == 200, f"正向：同源 POST → {st}")
         st, _, _ = req("127.0.0.1", P, "POST", "/api/asr/reload", L)
         check(st == 200, f"正向：不带 Origin（curl、脚本）→ {st}")
+        st, _, _ = req("127.0.0.1", P, "POST", "/api/asr/reload", {**L, "Sec-Fetch-Site": "cross-site"})
+        check(st == 403, f"无 Origin 但 Sec-Fetch-Site: cross-site → {st}（应 403）")
         st, _, _ = req("127.0.0.1", P, "GET", "/api/meetings", {**L, "Origin": "https://evil.test"})
         check(st == 200, f"跨站 GET 不拦（浏览器同源策略本身不让对方读到响应）→ {st}")
 
@@ -152,6 +160,19 @@ async def main():
             st, _, _ = req(ip, lan_port, "POST", "/lan/login", {**T, "Origin": "https://evil.test", "Content-Type": "application/x-www-form-urlencoded"},
                            body, tls=True)
             check(st == 403, f"跨站页面代填口令登录（登录 CSRF）→ {st}（应 403）")
+            st, _, _ = req(ip, lan_port, "POST", "/lan/login", {**T, "Origin": f"http://{ip}:{lan_port}", "Content-Type": "application/x-www-form-urlencoded"},
+                           body, tls=True)
+            check(st == 403, f"HTTPS 端口收到 http:// 同 Host Origin → {st}（应 403）")
+            st, _, login_body = req(ip, lan_port, "GET", "/lan/login?err=FAKE_ERR_BANNER", T, tls=True)
+            check(st == 200 and b"FAKE_ERR_BANNER" not in login_body, f"GET /lan/login 不回显查询参数 err → {st}")
+            st, _, _ = req(ip, lan_port, "GET", "/api/meetings", {**T, "Cookie": "mn_lan=\xb2.deadbeef"}, tls=True)
+            check(st == 401, f"畸形 Cookie（Latin-1 上标数字 ²）→ {st}（应 401 而非 500）")
+            st, _, _ = req(ip, lan_port, "GET", "/lan/logout", {**T, "Cookie": cookie}, tls=True)
+            check(st == 405, f"GET /lan/logout 被拒（防跨站图片强退）→ {st}（应 405）")
+            st, _, _ = req(ip, lan_port, "POST", "/lan/logout", {**T, "Origin": "https://evil.test", "Cookie": cookie}, tls=True)
+            check(st == 403, f"跨站 POST /lan/logout 被拒 → {st}（应 403）")
+            st, hd_out, _ = req(ip, lan_port, "POST", "/lan/logout", {**T, "Origin": f"https://{ip}:{lan_port}", "Cookie": cookie}, tls=True)
+            check(st == 303 and "mn_lan=" in (hd_out.get("set-cookie") or hd_out.get("Set-Cookie") or ""), f"正向：同源 POST /lan/logout → {st}")
             st, hd, _ = req(ip, lan_port, "GET", "/api/meetings", {**T, "Cookie": cookie}, tls=True)
             cc = hd.get("cache-control") or hd.get("Cache-Control")
             check(st == 200 and cc == "no-store", f"登录后读会议 → {st}，Cache-Control: {cc}（应 no-store）")
@@ -180,6 +201,11 @@ async def main():
         from cryptography import x509
         from cryptography.hazmat.primitives import serialization
         d = tmp / "lan"
+        if os.name != "nt":
+            check((d.stat().st_mode & 0o777) == 0o700, f"data/lan 目录权限 0o700（实际 {oct(d.stat().st_mode & 0o777)}）")
+            for fn in ("config.json", "ca.key", "server.key"):
+                mode = (d / fn).stat().st_mode & 0o777
+                check(mode == 0o600, f"{fn} 权限 0o600（实际 {oct(mode)}）")
         ca = x509.load_pem_x509_certificate((d / "ca.pem").read_bytes())
         ca_key = serialization.load_pem_private_key((d / "ca.key").read_bytes(), None)
         nc = ca.extensions.get_extension_for_class(x509.NameConstraints)
@@ -214,8 +240,14 @@ async def main():
     print(f"\n{'全部通过' if not fails else f'{fails} 项失败'}（日志：{tmp / 'server.log'}）")
     if not fails:
         shutil.rmtree(tmp, ignore_errors=True)
+    return fails
+
+
+def test_lan_security():
+    n = asyncio.run(main())
+    assert n == 0, f"{n} 项局域网安全测试失败"
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
-    sys.exit(1 if fails else 0)
+    _STANDALONE = True
+    sys.exit(1 if asyncio.run(main()) else 0)

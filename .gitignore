@@ -1,5 +1,15 @@
 .venv*/
 __pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.ms-cache/
 data/
 .backup/
 .DS_Store
+tests/mobile/node_modules/
+.audit/
+desktop/node_modules/
+desktop/out/
+desktop/dist/
+desktop/*.tsbuildinfo

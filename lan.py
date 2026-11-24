@@ -20,15 +20,20 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
+import weakref
 from datetime import UTC, datetime, timedelta
 from html import escape
+from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import uvicorn
@@ -48,23 +53,65 @@ MAIN_PORT = int(os.environ.get("PORT") or 8770)
 PUBLIC = {"/lan/login", "/lan/logout", "/lan/ca.cer", "/lan/icon.png"}  # 没登录也能打开：登录页、下载根证书
 
 _cfg: dict | None = None
+_cfg_lock = threading.RLock()
+
+
+def _ensure_dir(d: Path | None = None) -> None:
+    target = d or DIR
+    target.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        os.chmod(target, 0o700)
+
+
+def _write_atomic(path: Path, data: bytes, *, secret: bool = False) -> None:
+    """原子写文件：先建唯一临时文件（敏感文件以 0o600 创建，无 0o644 窗口）再 os.replace。"""
+    if secret:
+        _ensure_dir(path.parent)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    tmp = None
+    mode = 0o600 if secret else 0o644
+    for _ in range(16):
+        cand = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            fd = os.open(cand, flags, mode)
+            tmp = cand
+            break
+        except FileExistsError:
+            continue
+    if fd is None or tmp is None:
+        raise OSError(f"cannot create temp file for {path}")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            if secret and hasattr(os, "fchmod"):
+                os.fchmod(f.fileno(), 0o600)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def cfg() -> dict:
     global _cfg
-    if _cfg is None:
-        _cfg = {**DEFAULTS, **(store.read_json(CFG) or {})}
-    return _cfg
+    with _cfg_lock:
+        if _cfg is None:
+            _cfg = {**DEFAULTS, **(store.read_json(CFG) or {})}
+        return dict(_cfg)
 
 
 def _save(**kw) -> dict:
     global _cfg
-    c = {**cfg(), **kw}
-    DIR.mkdir(parents=True, exist_ok=True)
-    store.write_json(CFG, c)
-    os.chmod(CFG, 0o600)
-    _cfg = c
-    return c
+    with _cfg_lock:
+        c = {**cfg(), **kw}
+        _write_atomic(CFG, (json.dumps(c, ensure_ascii=False, indent=1) + "\n").encode("utf-8"), secret=True)
+        _cfg = c
+        return dict(c)
 
 
 # ---------------- 口令和登录 ----------------
@@ -79,7 +126,12 @@ def set_password(pw: str) -> None:
 
 def check_password(pw: str) -> bool:
     c = cfg()
-    return bool(c["pw_hash"]) and hmac.compare_digest(_pbkdf(pw, c["pw_salt"]), c["pw_hash"])
+    if not c.get("pw_hash") or not c.get("pw_salt"):
+        return False
+    try:
+        return hmac.compare_digest(_pbkdf(pw, c["pw_salt"]), c["pw_hash"])
+    except ValueError:
+        return False
 
 
 def logout_all() -> None:
@@ -96,35 +148,87 @@ def make_token() -> str:
 
 
 def valid_token(tok: str | None) -> bool:
-    if not tok or "." not in tok or not cfg()["secret"]:
+    c = cfg()
+    secret = c.get("secret")
+    if not tok or "." not in tok or not secret:
         return False
     ts, sig = tok.split(".", 1)
-    return ts.isdigit() and time.time() - int(ts) < MAX_AGE and hmac.compare_digest(sig, _sign(ts))
+    if not (ts.isascii() and ts.isdigit()):
+        return False
+    try:
+        issued = int(ts)
+        expected = hmac.new(bytes.fromhex(secret), ts.encode(), "sha256").hexdigest()
+    except ValueError:
+        return False
+    now = time.time()
+    if issued > now + 60 or now - issued >= MAX_AGE:
+        return False
+    return hmac.compare_digest(sig, expected)
 
 
-_fails: dict[str, list] = {}  # ip -> [连续输错次数, 锁到什么时候]
+_auth_lock = threading.Lock()
+_login_lock = threading.Lock()  # 串行化口令校验，避免高并发突发请求绕过 5 次 / 20 次锁定阈值
+_fails: dict[str, list] = {}  # ip -> [连续输错次数, 锁到什么时候, 上次失败时间]
 # 换着 IP 猜（IPv6 临时地址、多台设备）：所有来源合计 10 分钟内错 20 次，全部暂停登录 10 分钟
 _all_fails: list[float] = []
 _all_lock = [0.0]
 GLOBAL_FAILS, GLOBAL_WINDOW, GLOBAL_LOCK = 20, 600, 600
+FAIL_TTL = 86400  # 24 小时无新失败则自动过期，防内存增长及跨月误累计
+MAX_FAIL_ENTRIES = 1024
+
+
+def _norm_ip(ip: str | None) -> str:
+    if not ip:
+        return "?"
+    try:
+        a = ipaddress.ip_address(ip)
+        if a.version == 6 and a.ipv4_mapped:
+            a = a.ipv4_mapped
+        return str(a)
+    except ValueError:
+        return ip
+
+
+def _prune_fails(now: float, keep: str | None = None) -> None:
+    stale = [k for k, f in _fails.items() if k != keep and now >= f[1] and now - (f[2] if len(f) > 2 else 0.0) > FAIL_TTL]
+    for k in stale:
+        _fails.pop(k, None)
+    if len(_fails) > MAX_FAIL_ENTRIES:
+        order = sorted((kv for kv in _fails.items() if kv[0] != keep),
+                       key=lambda kv: (kv[1][1] > now, kv[1][2] if len(kv[1]) > 2 else 0.0))
+        for k, _ in order[: len(_fails) - MAX_FAIL_ENTRIES]:
+            _fails.pop(k, None)
 
 
 def _locked(ip: str) -> int:
-    f = _fails.get(ip)
-    return max(0, int(max(f[1] if f else 0, _all_lock[0]) - time.time()))
+    ip = _norm_ip(ip)
+    now = time.time()
+    with _auth_lock:
+        f = _fails.get(ip)
+        until = max(f[1] if f else 0.0, _all_lock[0])
+    return math.ceil(until - now) if until > now else 0
 
 
 def _failed(ip: str) -> None:
-    f = _fails.setdefault(ip, [0, 0.0])
-    f[0] += 1
-    if f[0] >= 5:  # 第 5 次起每次多锁一倍：30 秒、1 分钟、2 分钟……最多 1 小时
-        f[1] = time.time() + min(3600, 30 * 2 ** (f[0] - 5))
+    ip = _norm_ip(ip)
     now = time.time()
-    _all_fails[:] = [t for t in _all_fails if now - t < GLOBAL_WINDOW] + [now]
-    if len(_all_fails) >= GLOBAL_FAILS:
-        _all_lock[0] = now + GLOBAL_LOCK
-        _all_fails.clear()
-        log.warning("LAN login: %d failures in %ds from all sources, locking logins for %ds", GLOBAL_FAILS, GLOBAL_WINDOW, GLOBAL_LOCK)
+    with _auth_lock:
+        f = _fails.get(ip)
+        if f is None or (now >= f[1] and now - (f[2] if len(f) > 2 else 0.0) > FAIL_TTL):
+            f = [0, 0.0, now]
+            _fails[ip] = f
+        elif len(f) < 3:
+            f.append(now)
+        f[0] += 1
+        f[2] = now
+        if f[0] >= 5:  # 第 5 次起每次多锁一倍：30 秒、1 分钟、2 分钟……最多 1 小时
+            f[1] = now + min(3600, 30 * (1 << min(f[0] - 5, 7)))
+        _prune_fails(now, keep=ip)
+        _all_fails[:] = [t for t in _all_fails if now - t < GLOBAL_WINDOW] + [now]
+        if len(_all_fails) >= GLOBAL_FAILS:
+            _all_lock[0] = now + GLOBAL_LOCK
+            _all_fails.clear()
+            log.warning("LAN login: %d failures in %ds from all sources, locking logins for %ds", GLOBAL_FAILS, GLOBAL_WINDOW, GLOBAL_LOCK)
 
 
 def is_local(scope) -> bool:
@@ -144,29 +248,82 @@ LOCAL_CLIENTS = [ipaddress.ip_network(n.strip(), strict=False)
                  for n in (os.environ.get("MN_LOCAL_CLIENTS") or "").split(",") if n.strip()]
 
 
+_hosts_lock = threading.Lock()
 _hosts = [0.0, set()]  # [上次刷新时间, 允许的 Host]
+_hosts_unknown_ts = [0.0]  # 上次因未知 Host 触发强制刷新的时间
+HOST_TTL = 60.0
+HOST_UNKNOWN_COOLDOWN = 30.0
+_hosts_async_locks: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 EXTRA_HOSTS = {h.strip().lower() for h in (os.environ.get("MN_ALLOWED_HOSTS") or "").split(",") if h.strip()}
 
 
+def _get_hosts_async_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _hosts_async_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _hosts_async_locks[loop] = lock
+    return lock
+
+
+def _tailscale_candidates() -> tuple[str, ...]:
+    if sys.platform == "darwin":
+        return ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale")
+    if sys.platform == "win32":
+        return ("tailscale", os.path.join(os.environ.get("ProgramFiles") or r"C:\Program Files", "Tailscale", "tailscale.exe"))
+    return ("tailscale",)
+
+
 def _tailscale_names() -> set[str]:
-    for exe in ("tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-                os.path.join(os.environ.get("ProgramFiles") or r"C:\Program Files", "Tailscale", "tailscale.exe")):
+    for exe in _tailscale_candidates():
+        resolved = shutil.which(exe) if os.sep not in exe and "/" not in exe else (exe if os.path.isfile(exe) else None)
+        if not resolved:
+            continue
         try:
-            out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=2, check=False).stdout
+            out = subprocess.run([resolved, "status", "--json"], capture_output=True, text=True, timeout=2, check=False).stdout
             name = (json.loads(out).get("Self") or {}).get("DNSName", "").rstrip(".").lower()
             return {name} if name else set()
         except (OSError, subprocess.SubprocessError, ValueError):
-            continue
+            return set()  # 已找到本机二进制但服务未运行/出错，不再重复尝试其他路径
     return set()
+
+
+def _compute_allowed_hosts() -> set[str]:
+    return ({"127.0.0.1", "localhost", "::1"} | {a["ip"] for a in addresses()} | {hostname().lower()}
+            | _tailscale_names() | EXTRA_HOSTS)
 
 
 def allowed_hosts(refresh: bool = False) -> set[str]:
     """能用来打开会议记录的主机名：本机回环、本机各网卡 IP、xxx.local、Tailscale 名字，以及 MN_ALLOWED_HOSTS 里加的。"""
-    if refresh or time.time() - _hosts[0] > 60:
-        _hosts[1] = ({"127.0.0.1", "localhost", "::1"} | {a["ip"] for a in addresses()} | {hostname().lower()}
-                     | _tailscale_names() | EXTRA_HOSTS)
-        _hosts[0] = time.time()
-    return _hosts[1]
+    now = time.time()
+    with _hosts_lock:
+        if not refresh and _hosts[1] and now - _hosts[0] <= HOST_TTL:
+            return set(_hosts[1])
+    computed = _compute_allowed_hosts()
+    now = time.time()
+    with _hosts_lock:
+        _hosts[1] = computed
+        _hosts[0] = now
+        return set(computed)
+
+
+async def allowed_hosts_async(refresh: bool = False) -> set[str]:
+    """异步单飞刷新允许的 Host 集合，避免阻塞 asyncio 事件循环。"""
+    now = time.time()
+    with _hosts_lock:
+        if not refresh and _hosts[1] and now - _hosts[0] <= HOST_TTL:
+            return set(_hosts[1])
+    async with _get_hosts_async_lock():
+        now = time.time()
+        with _hosts_lock:
+            if not refresh and _hosts[1] and now - _hosts[0] <= HOST_TTL:
+                return set(_hosts[1])
+        computed = await asyncio.to_thread(_compute_allowed_hosts)
+        now = time.time()
+        with _hosts_lock:
+            _hosts[1] = computed
+            _hosts[0] = now
+            return set(computed)
 
 
 def _header(scope, name: bytes) -> str | None:
@@ -179,8 +336,26 @@ def _header(scope, name: bytes) -> str | None:
 def host_name(host: str) -> str:
     h = host.strip().lower()
     if h.startswith("["):
-        return h[1:h.find("]")] if "]" in h else h
-    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+        end = h.find("]")
+        if end == -1:
+            return h
+        rest = h[end + 1:]
+        if rest and not (rest.startswith(":") and rest[1:].isascii() and rest[1:].isdigit()):
+            return h
+        return h[1:end]
+    if h.count(":") == 1:
+        name, port = h.rsplit(":", 1)
+        return name if (port.isascii() and port.isdigit()) else h
+    return h
+
+
+def _claim_unknown_host_refresh() -> bool:
+    now = time.time()
+    with _hosts_lock:
+        if now - _hosts[0] > HOST_UNKNOWN_COOLDOWN and now - _hosts_unknown_ts[0] > HOST_UNKNOWN_COOLDOWN:
+            _hosts_unknown_ts[0] = now
+            return True
+        return False
 
 
 def host_ok(scope) -> bool:
@@ -190,8 +365,20 @@ def host_ok(scope) -> bool:
         return False
     if h in allowed_hosts():
         return True
-    if time.time() - _hosts[0] > 5:  # 刚换了网络 / IP：马上重新取一次再判断
+    if _claim_unknown_host_refresh():  # 刚换了网络 / IP：限频重新取一次再判断
         return h in allowed_hosts(refresh=True)
+    return False
+
+
+async def host_ok_async(scope) -> bool:
+    """Guard 中间件使用的异步 Host 校验：子进程刷新放到线程池单飞执行，不阻塞事件循环。"""
+    h = host_name(_header(scope, b"host") or "")
+    if not h:
+        return False
+    if h in await allowed_hosts_async():
+        return True
+    if _claim_unknown_host_refresh():
+        return h in await allowed_hosts_async(refresh=True)
     return False
 
 
@@ -199,14 +386,31 @@ UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def origin_ok(scope) -> bool:
-    """改数据的请求和 WebSocket：浏览器带的 Origin 必须就是这个网站本身（同一个 Host）。没有 Origin 的不是浏览器发的，放行。"""
+    """改数据的请求和 WebSocket：浏览器带的 Origin 必须就是这个网站本身（同协议、同 Host）。
+    没有 Origin 的一般不是浏览器发的（如 curl），但若带 Sec-Fetch-Site: cross-site 仍拒绝。"""
     if scope["type"] == "http" and scope.get("method") not in UNSAFE:
         return True
     origin = _header(scope, b"origin")
     if origin is None:
-        return True
-    host = (_header(scope, b"host") or "").lower()
-    return origin != "null" and urlsplit(origin).netloc.lower() == host
+        sfs = (_header(scope, b"sec-fetch-site") or "").strip().lower()
+        return sfs != "cross-site"
+    if origin == "null":
+        return False
+    parts = urlsplit(origin)
+    scheme = parts.scheme.lower()
+    scope_scheme = (scope.get("scheme") or "").lower()
+    if scope_scheme in ("https", "wss"):
+        expected = "https"
+    elif scope_scheme in ("http", "ws"):
+        expected = "http"
+    else:
+        expected = ""
+    if expected and scheme != expected:
+        return False
+    if not expected and scheme not in ("http", "https"):
+        return False
+    host = (_header(scope, b"host") or "").strip().lower()
+    return bool(host) and parts.netloc.lower() == host
 
 
 def _cookie(scope) -> str | None:
@@ -232,7 +436,7 @@ class Guard:
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
-        if not host_ok(scope):
+        if not await host_ok_async(scope):
             log.warning("rejected Host %r for %s", _header(scope, b"host"), scope["path"])
             return await self._deny(scope, receive, send, 421, "这个地址不能用来打开会议记录（Host 不是这台电脑的地址）")
         if not origin_ok(scope):
@@ -269,10 +473,12 @@ class Guard:
 
 # ---------------- 地址和证书 ----------------
 def hostname() -> str:
-    try:
-        n = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=3, check=False).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        n = ""
+    n = ""
+    if sys.platform == "darwin":
+        try:
+            n = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=3, check=False).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            n = ""
     return (n or socket.gethostname().split(".")[0]) + ".local"
 
 
@@ -295,9 +501,31 @@ def addresses() -> list[dict]:
 VIRTUAL_IFACES = ("utun", "lo", "docker", "br-", "veth", "virbr", "cni", "flannel", "tailscale")
 
 
+def _ifaces_fallback() -> list[tuple[str, str, bool]]:
+    """纯 Python 回退（极简 Linux 容器里没有 ip / ifconfig 时使用）：通过 UDP 路由探测 + getaddrinfo 取本机 IPv4。"""
+    ips: set[str] = set()
+    for target in (("10.255.255.255", 1), ("192.0.2.1", 80)):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(target)
+                ip = s.getsockname()[0]
+                if ip and not ip.startswith("127."):
+                    ips.add(ip)
+        except OSError:
+            pass
+    try:
+        for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = ai[4][0]
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except OSError:
+        pass
+    return [("", ip, True) for ip in sorted(ips)]
+
+
 def _ifaces() -> list[tuple[str, str, bool]]:
     """[(网卡名, IPv4, 有没有广播地址)]。macOS 用 ifconfig，Linux 用 ip（新系统多半没装 ifconfig），
-    Windows 用本机名解析出的地址（不知道网卡名，私网地址都当 Wi-Fi / 有线）。"""
+    两者都不可用时（如精简容器）用纯 Python 回退；Windows 用本机名解析出的地址。"""
     if sys.platform == "win32":
         try:
             ips = {ai[4][0] for ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)}
@@ -319,7 +547,7 @@ def _ifaces() -> list[tuple[str, str, bool]]:
     try:
         out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3, check=False).stdout
     except (OSError, subprocess.SubprocessError):
-        return []
+        return _ifaces_fallback()
     for line in out.splitlines():
         m = re.match(r"^(\S+): flags", line)
         if m:
@@ -328,7 +556,7 @@ def _ifaces() -> list[tuple[str, str, bool]]:
         m = re.match(r"\s+inet (\d+\.\d+\.\d+\.\d+)", line)
         if m:
             res.append((iface, m.group(1), "broadcast" in line))
-    return res
+    return res or _ifaces_fallback()
 
 
 def _x509():
@@ -340,8 +568,7 @@ def _x509():
 
 
 def _write_key(path, key, serialization) -> None:
-    path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-    os.chmod(path, 0o600)
+    _write_atomic(path, key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), secret=True)
 
 
 # 根证书只能签这些名字（RFC 5280 Name Constraints）：私网 IPv4、Tailscale、.local、.ts.net
@@ -361,17 +588,26 @@ def _permitted_dns(name: str) -> bool:
 def _load_ca():
     x509, hashes, serialization, rsa, _, NameOID = _x509()
     if CA_KEY.exists() and CA_PEM.exists():
-        key, cert = serialization.load_pem_private_key(CA_KEY.read_bytes(), None), x509.load_pem_x509_certificate(CA_PEM.read_bytes())
         try:
-            cert.extensions.get_extension_for_class(x509.NameConstraints)
-            return key, cert
-        except x509.ExtensionNotFound:
-            # 旧版根证书没有名称限制：作废（删掉私钥），换一张有限制的。装过旧证书的设备要重新安装
-            log.warning("replacing LAN root CA without name constraints")
-            CA_PEM.replace(DIR / "ca-old-unconstrained.pem")
-            CA_KEY.unlink()
-            _save(ca_replaced=int(time.time()))
-    DIR.mkdir(parents=True, exist_ok=True)
+            key = serialization.load_pem_private_key(CA_KEY.read_bytes(), None)
+            cert = x509.load_pem_x509_certificate(CA_PEM.read_bytes())
+        except Exception:  # noqa: BLE001
+            log.warning("corrupt LAN root CA, regenerating", exc_info=True)
+            with contextlib.suppress(OSError):
+                CA_KEY.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                CA_PEM.unlink(missing_ok=True)
+        else:
+            try:
+                cert.extensions.get_extension_for_class(x509.NameConstraints)
+                return key, cert
+            except x509.ExtensionNotFound:
+                # 旧版根证书没有名称限制：作废（删掉私钥），换一张有限制的。装过旧证书的设备要重新安装
+                log.warning("replacing LAN root CA without name constraints")
+                CA_PEM.replace(DIR / "ca-old-unconstrained.pem")
+                CA_KEY.unlink()
+                _save(ca_replaced=int(time.time()))
+    _ensure_dir()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     # CN 最长 64 字节（中文一个字 3 字节）：主机名很长时（如 CI 的虚拟机）截短，只是显示用
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"会议记录 本机根证书（{hostname().removesuffix('.local')[:28]}）"),
@@ -388,7 +624,7 @@ def _load_ca():
             .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
             .sign(key, hashes.SHA256()))
     _write_key(CA_KEY, key, serialization)
-    CA_PEM.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    _write_atomic(CA_PEM, cert.public_bytes(serialization.Encoding.PEM), secret=False)
     SRV_PEM.unlink(missing_ok=True)
     log.info("created local root CA")
     return key, cert
@@ -399,9 +635,19 @@ def ensure_certs() -> bool:
     x509, hashes, serialization, rsa, EKU, NameOID = _x509()
     ca_key, ca = _load_ca()
     host = hostname()
-    # 只放根证书允许的名字（名称限制之外的名字会让整张证书失效）：局域网 / Tailscale IP、xxx.local、Tailscale 名字
+    # 只放根证书允许的名字（名称限制之外的名字会让整张证书失效）：局域网 / Tailscale IP、xxx.local、Tailscale 名字及 MN_ALLOWED_HOSTS 中的合法内网项
     ips = {a["ip"] for a in addresses() if _permitted_ip(a["ip"])}
     dns = {n for n in {host.lower(), *_tailscale_names()} if _permitted_dns(n)}
+    for extra in EXTRA_HOSTS:
+        h = host_name(extra)
+        try:
+            a = ipaddress.ip_address(h)
+        except ValueError:
+            if _permitted_dns(h):
+                dns.add(h)
+        else:
+            if a.version == 4 and _permitted_ip(str(a)):
+                ips.add(str(a))
     now = datetime.now(UTC)
     if SRV_PEM.exists() and SRV_KEY.exists():
         try:
@@ -433,7 +679,7 @@ def ensure_certs() -> bool:
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
             .sign(ca_key, hashes.SHA256()))
     _write_key(SRV_KEY, key, serialization)
-    SRV_PEM.write_bytes(cert.public_bytes(serialization.Encoding.PEM) + ca.public_bytes(serialization.Encoding.PEM))
+    _write_atomic(SRV_PEM, cert.public_bytes(serialization.Encoding.PEM) + ca.public_bytes(serialization.Encoding.PEM), secret=False)
     log.info("issued LAN server certificate for %s %s", sorted(dns), sorted(ips))
     return True
 
@@ -441,11 +687,15 @@ def ensure_certs() -> bool:
 def ca_info() -> dict | None:
     if not CA_PEM.exists():
         return None
-    x509, hashes, serialization, *_ = _x509()
-    ca = x509.load_pem_x509_certificate(CA_PEM.read_bytes())
-    fp = ca.fingerprint(hashes.SHA256()).hex().upper()
-    return {"der": ca.public_bytes(serialization.Encoding.DER), "sha256": ":".join(fp[i:i + 2] for i in range(0, len(fp), 2)),
-            "name": ca.subject.rfc4514_string()}
+    try:
+        x509, hashes, serialization, *_ = _x509()
+        ca = x509.load_pem_x509_certificate(CA_PEM.read_bytes())
+        fp = ca.fingerprint(hashes.SHA256()).hex().upper()
+        return {"der": ca.public_bytes(serialization.Encoding.DER), "sha256": ":".join(fp[i:i + 2] for i in range(0, len(fp), 2)),
+                "name": ca.subject.rfc4514_string()}
+    except Exception:  # noqa: BLE001
+        log.warning("corrupt LAN CA certificate at %s", CA_PEM, exc_info=True)
+        return None
 
 
 def firewall_on() -> bool:
@@ -529,26 +779,43 @@ class LanServer:
                 await asyncio.to_thread(ensure_certs)
             except Exception as e:
                 log.exception("cert")
-                self.error = f"生成证书失败：{e}"
+                self.error = "生成安全证书失败，请检查数据目录权限"
                 return
-            port = int(c["port"])
-            # macOS 上设了 SO_REUSEADDR 时，别的程序占着 0.0.0.0:端口 也能绑定成功，手机却会连到那个程序：先试着连一下
-            if await asyncio.to_thread(_listening, port):
-                self.error = f"端口 {port} 已被别的程序占用，换一个端口再试"
+            base_port = int(c["port"])
+            chosen_port = None
+            sock = None
+            last_err = ""
+            candidates = [base_port] + [
+                p for p in range(base_port + 1, min(65535, base_port + 12)) if p != MAIN_PORT
+            ]
+            for cand_port in candidates:
+                if cand_port == MAIN_PORT:
+                    continue
+                if await asyncio.to_thread(_listening, cand_port):
+                    last_err = f"端口 {cand_port} 已被占用，请换一个端口"
+                    continue
+                try:
+                    sock = _bind(cand_port)
+                    chosen_port = cand_port
+                    break
+                except OSError as e:
+                    if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1)):
+                        last_err = f"端口 {cand_port} 已被占用，请换一个端口"
+                    else:
+                        last_err = f"无法监听端口 {cand_port}，请检查网络或防火墙权限"
+            if sock is None or chosen_port is None:
+                self.error = last_err or f"端口 {base_port} 不可用，请换一个端口"
                 return
-            try:
-                sock = _bind(port)
-            except OSError as e:
-                self.error = (f"端口 {port} 已被别的程序占用，换一个端口再试"
-                              if e.errno in (errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", -1)) else f"无法监听端口 {port}：{e}")
-                return
+            port = chosen_port
+            if port != base_port:
+                await asyncio.to_thread(_save, port=port)
             config = uvicorn.Config(self.app, lifespan="off", log_config=None, proxy_headers=False, log_level="warning",
                                     ssl_certfile=str(SRV_PEM), ssl_keyfile=str(SRV_KEY), timeout_graceful_shutdown=3)
             try:
                 config.load()
             except (Exception, SystemExit) as e:  # noqa: BLE001 —— uvicorn 出错时会 sys.exit，不能让它带走主服务
                 sock.close()
-                self.error = f"启动失败：{e}"
+                self.error = f"局域网服务启动失败：{e}"
                 return
             self.ssl, self.port = config.ssl, port
             self.server = _Server(config)
@@ -568,21 +835,32 @@ class LanServer:
             self.error = f"局域网服务出错：{e}"
         finally:
             sock.close()
+            if self.server is server and self.watch:
+                self.watch.cancel()
+                self.watch = None
 
     async def _watch_ip(self) -> None:
         """每分钟看一下 IP 有没有变：变了就重签服务器证书，新连接直接用新证书，不用重启。"""
         while True:
             await asyncio.sleep(60)
             try:
-                if await asyncio.to_thread(ensure_certs) and self.ssl:
-                    self.ssl.load_cert_chain(str(SRV_PEM), str(SRV_KEY))
-            except Exception:
+                async with self._lock:
+                    if not self.running or not self.ssl:
+                        continue
+                    if await asyncio.to_thread(ensure_certs):
+                        await asyncio.to_thread(self.ssl.load_cert_chain, str(SRV_PEM), str(SRV_KEY))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
                 log.exception("refresh cert")
 
     async def _stop(self) -> None:
         if self.watch:
-            self.watch.cancel()
+            watch = self.watch
             self.watch = None
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
         if self.server and self.task:
             self.server.should_exit = True
             try:
@@ -642,22 +920,45 @@ def get_lan(request: Request):
 async def put_lan(request: Request, body: dict = Body(...)):
     _only_here(request)
     c = cfg()
-    pw = (body.get("password") or "").strip()
-    if pw:
-        if len(pw) < 6:
-            raise HTTPException(400, "访问口令至少 6 位")
-        set_password(pw)
-    port = int(body.get("port") or c["port"])
+    raw_pw = body.get("password")
+    if raw_pw is None:
+        pw = ""
+    elif isinstance(raw_pw, str):
+        pw = raw_pw.strip()
+    else:
+        raise HTTPException(400, "访问口令格式不正确")
+    if pw and len(pw) < 6:
+        raise HTTPException(400, "访问口令至少 6 位")
+
+    raw_port = body.get("port")
+    if raw_port is None or raw_port == "":
+        port = int(c["port"])
+    else:
+        if isinstance(raw_port, bool):
+            raise HTTPException(400, f"端口要在 1024–65535 之间，且不能和本机端口 {MAIN_PORT} 相同")
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"端口要在 1024–65535 之间，且不能和本机端口 {MAIN_PORT} 相同") from e
     if not 1024 <= port <= 65535 or port == MAIN_PORT:
         raise HTTPException(400, f"端口要在 1024–65535 之间，且不能和本机端口 {MAIN_PORT} 相同")
-    enabled = bool(body.get("enabled"))
-    if enabled and not cfg()["pw_hash"]:
-        raise HTTPException(400, "开启前请先设置访问口令（至少 6 位）")
-    changed = pw or enabled != c["enabled"] or port != int(c["port"]) or (enabled and not server.running)
-    _save(enabled=enabled, port=port)
+
+    enabled = bool(body["enabled"]) if "enabled" in body and body["enabled"] is not None else bool(c["enabled"])
+    generated_pw = ""
+    if enabled and not (pw or c["pw_hash"]):
+        generated_pw = f"{secrets.randbelow(900000) + 100000}"
+        pw = generated_pw
+
+    changed = bool(pw) or enabled != c["enabled"] or port != int(c["port"]) or (enabled and not server.running)
+    if pw:
+        await asyncio.to_thread(set_password, pw)
+    await asyncio.to_thread(_save, enabled=enabled, port=port)
     if changed:
         await server.apply()
-    return status(request)
+    res = await asyncio.to_thread(status, request)
+    if generated_pw:
+        res["generated_password"] = generated_pw
+    return res
 
 
 @router.post("/api/lan/logout-all")
@@ -671,7 +972,7 @@ def lan_logout_all(request: Request):
 def ca_cert():
     ca = ca_info()
     if not ca:
-        raise HTTPException(404, "还没有生成证书：先在电脑上的“设置 · 平板、手机访问”里开启")
+        raise HTTPException(404, "还没有生成证书：请先在电脑的「设置 · 手机访问」里开启局域网访问")
     return Response(ca["der"], media_type="application/x-x509-ca-cert",
                     headers={"Content-Disposition": 'attachment; filename="meeting-notes-ca.cer"'})
 
@@ -686,33 +987,42 @@ def _next(v: str) -> str:
 
 
 @router.get("/lan/login")
-def login_page(request: Request, next: str = "/", err: str = ""):
+def login_page(request: Request, next: str = "/"):
     if is_local(request.scope) or valid_token(request.cookies.get(COOKIE)):
         return RedirectResponse(_next(next), 303)
-    return HTMLResponse(_login_html(_next(next), err), headers={"Cache-Control": "no-store"})
+    return HTMLResponse(_login_html(_next(next), ""), headers={"Cache-Control": "no-store"})
 
 
 @router.post("/lan/login")
 def login(request: Request, password: str = Form(""), next: str = Form("/")):
-    ip = request.client.host if request.client else "?"
+    ip = _norm_ip(request.client.host if request.client else None)
     wait = _locked(ip)
     if wait:
-        return HTMLResponse(_login_html(_next(next), f"输错次数太多，请 {wait} 秒后再试"), 429)
-    if not check_password(password):
-        _failed(ip)
-        log.warning("LAN login failed from %s", ip)
-        return HTMLResponse(_login_html(_next(next), "口令不对" if not _locked(ip) else f"输错次数太多，请 {_locked(ip)} 秒后再试"), 401)
-    _fails.pop(ip, None)
+        return HTMLResponse(_login_html(_next(next), f"输错次数太多，请 {wait} 秒后再试"), 429,
+                            headers={"Cache-Control": "no-store"})
+    with _login_lock:
+        wait = _locked(ip)
+        if wait:
+            return HTMLResponse(_login_html(_next(next), f"输错次数太多，请 {wait} 秒后再试"), 429,
+                                headers={"Cache-Control": "no-store"})
+        if not check_password(password):
+            _failed(ip)
+            log.warning("LAN login failed from %s", ip)
+            w = _locked(ip)
+            return HTMLResponse(_login_html(_next(next), "口令不对" if not w else f"输错次数太多，请 {w} 秒后再试"), 401,
+                                headers={"Cache-Control": "no-store"})
+        with _auth_lock:
+            _fails.pop(ip, None)
     log.info("LAN login from %s", ip)
     resp = RedirectResponse(_next(next), 303)
     resp.set_cookie(COOKIE, make_token(), max_age=MAX_AGE, httponly=True, secure=True, samesite="lax")
     return resp
 
 
-@router.get("/lan/logout")
+@router.post("/lan/logout")
 def logout():
     resp = RedirectResponse("/lan/login", 303)
-    resp.delete_cookie(COOKIE)
+    resp.delete_cookie(COOKIE, httponly=True, secure=True, samesite="lax")
     return resp
 
 

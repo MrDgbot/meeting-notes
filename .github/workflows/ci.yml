@@ -1,11 +1,15 @@
 # 在 Linux / Windows / macOS 上各跑一遍：单元测试 → 下载（或从缓存取）语音模型 → 集成测试 → 端到端转写一段普通话录音（macOS 除外）。
-# Linux 上另外用 PulseAudio 虚拟声卡测全天模式的采音（放录音进去，核对自动记录出来的文字）。
+# Linux 上另外用 PulseAudio 虚拟声卡测全天模式的采音（放录音进去，核对自动记录出来的文字），并校验 Docker 镜像构建。
 name: CI
 on:
   push:
     branches: [main, platform]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PYTHONUTF8: "1"  # Windows 上中文输出不按 GBK / cp1252
@@ -44,15 +48,26 @@ jobs:
       - name: 依赖
         if: runner.os != 'Linux'
         run: uv sync --frozen
+      - name: 校验锁文件一致（uv.lock）
+        run: uv lock --check && uv export --frozen --no-hashes >/dev/null
+      - name: 结构不变量检查（INV001-INV010）
+        run: uv run --no-sync python scripts/check_invariants.py
       - name: 单元测试（不加载语音模型）
+        run: uv run --no-sync --with pytest pytest -v
+      - name: 前端脚本语法检查与浏览器端降采样测试（AudioWorklet）
         run: |
           set -e
-          uv run --no-sync python tests/test_platform.py
-          uv run --no-sync python tests/test_cloud_asr_config.py
-          uv run --no-sync python tests/test_diarize_cluster.py
-          uv run --no-sync python tests/test_split_level.py
-          uv run --no-sync python tests/test_llm_stream.py
-          uv run --no-sync python tests/test_vocab_names.py
+          for f in static/app.js static/js/*.js static/pcm-worklet.js; do
+            node --check "$f"
+          done
+          node tests/audio/resampler.mjs
+      - name: 浏览器端到端与深浅色 WCAG 2.2 AA 校验（Playwright Chromium）
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          npm --prefix tests/mobile ci
+          npx --prefix tests/mobile playwright install --with-deps chromium
+          node tests/e2e_browser.mjs
 
       - name: 取缓存的语音模型
         id: models
@@ -102,3 +117,38 @@ jobs:
       - name: 说话人分离子进程断网也能跑、不发起任何网络连接
         if: runner.os != 'macOS'
         run: uv run --no-sync python tests/test_diarize_offline.py
+
+  formal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 缓存 tla2tools.jar
+        uses: actions/cache@v4
+        with:
+          path: .cache/tla2tools-1.7.4
+          key: tla2tools-1.7.4
+      - name: TLA+ 形式化模型校验（状态机与并发不变量）
+        run: bash scripts/check_formal.sh
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建 Docker 镜像（CPU）
+        run: docker build -t meeting-notes:ci .
+      - name: 校验容器运行环境（非 root、tini、iproute2、无 uv、模块可导入）
+        run: |
+          set -e
+          test "$(docker run --rm --entrypoint id meeting-notes:ci -u)" != "0"
+          docker run --rm --entrypoint sh meeting-notes:ci -c "
+            test -x /usr/bin/tini
+            command -v ip >/dev/null
+            ! command -v uv >/dev/null
+            python -c 'import lan, app; print(\"docker ok\")'
+          "

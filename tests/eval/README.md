@@ -1,6 +1,6 @@
 # 评测
 
-会议转写和纪要的评测脚本。数据和结果都放在仓库外：`~/eval-data/`（输入、人工标注）、`~/eval-out/`（结果）。
+会议转写和纪要的评测脚本。数据和结果都放在仓库外：`~/eval-data/`（输入、人工标注）、`~/eval-out/`（结果）。结论写在 `docs/direction-evidence.md`。
 
 ```bash
 cd tests/eval && uv venv -p 3.11 .venv && VIRTUAL_ENV=.venv uv pip install meeteval pyannote.metrics jiwer tabulate intervaltree textgrid tqdm simplejson
@@ -12,6 +12,10 @@ cd tests/eval && uv venv -p 3.11 .venv && VIRTUAL_ENV=.venv uv pip install meete
 | `prep_alimeeting.py` | tests/eval/.venv | AliMeeting → 单声道 wav、参考 RTTM（主办方脚本）、参考 STM |
 | `run_pipeline.py` | 仓库的 .venv | 用产品的 `Engine.transcribe` 跑转写，存段落、句子、说话人分离结果 |
 | `score.py` | tests/eval/.venv | DER（dscore + pyannote）、CER（sclite + jiwer + cer.py）、cpCER（MeetEval） |
+| `weekly_prep.py` | 仓库的 .venv | 从真实会议里分层抽片段、预填文字、剪说话人样本 |
+| `annotate.py` | 任意 python3 | 人工标注页 http://127.0.0.1:8790 |
+| `score_weekly.py` | tests/eval/.venv | 用人工标注给真实会议上的几种转写打分 |
+| `import_feishu.py` | 任意 python3 | 飞书妙记网页接口取下的逐字稿 → 和 run_pipeline 一样的格式 |
 | `gen_minutes.py` | 仓库的 .venv | 用产品的纪要接口生成纪要（临时数据目录，不碰真实数据） |
 | `split_sweep.py` | 仓库的 .venv | 按说话人拆句（`SPLIT_MIN_MS`）的离线实验：用 run_pipeline 存下的 Nano 原始输出重算 cpCER，不重跑模型 |
 | `diag/breakdown2.py` | tests/eval/.venv | 错字按“参考片段和别人重叠的比例”分组（单人 / 部分重叠 / 以重叠为主） |

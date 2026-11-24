@@ -5,3 +5,10 @@
 !*.py
 !static/
 !scripts/
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.backup
+tests/mobile/node_modules

@@ -10,10 +10,11 @@ from pathlib import Path
 
 import numpy as np
 
-os.environ["MEETING_DATA"] = tempfile.mkdtemp(prefix="mn-test-")
+os.environ.setdefault("MEETING_DATA", tempfile.mkdtemp(prefix="mn-test-"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import asr_engine  # noqa: E402
 from asr_engine import Engine  # noqa: E402
+import store  # noqa: E402
 
 E = Engine
 
@@ -35,11 +36,14 @@ def test_level():
     spiky[100] = 0.9  # 峰值放大后会远超 1：软限幅，不超过 1；0.8 以下的样本不受影响
     ys = asr_engine.level(spiky)
     assert np.abs(ys).max() <= 1.0 and np.allclose(ys[1:100], spiky[1:100] * (ys[1:100] / spiky[1:100]).mean())
-    for mode, want in (("off", (False, False)), ("vad", (False, True)), ("all", (True, True))):
-        asr_engine.LEVEL_USE = mode
-        a, v = asr_engine.level_pair(quiet)
-        assert (a is not quiet, v is not quiet) == want, mode
-    asr_engine.LEVEL_USE = "all"
+    orig_level_use = asr_engine.LEVEL_USE
+    try:
+        for mode, want in (("off", (False, False)), ("vad", (False, True)), ("all", (True, True))):
+            asr_engine.LEVEL_USE = mode
+            a, v = asr_engine.level_pair(quiet)
+            assert (a is not quiet, v is not quiet) == want, mode
+    finally:
+        asr_engine.LEVEL_USE = orig_level_use
     print("ok 音量归一：小声放大到 -30 dBFS、够响的不动、最多 +30 dB、软限幅；off/vad/all 三种用法")
 
 
@@ -119,12 +123,21 @@ def test_merge():
 
 
 def test_diarizer_setting():
-    assert asr_engine.diarizer_mode() == "campp"
-    p = Path(os.environ["MEETING_DATA"]) / "settings.json"
-    for v, want in (("pyannote", "pyannote"), ("不存在", "campp")):
-        p.write_text(json.dumps({"asr": {"model": "nano", "diarizer": v}}))
-        assert asr_engine.diarizer_mode() == want, v
-    p.unlink()
+    p = store.DATA / "settings.json"
+    had = p.exists()
+    prev = p.read_bytes() if had else None
+    try:
+        if had:
+            p.unlink()
+        assert asr_engine.diarizer_mode() == "campp"
+        for v, want in (("pyannote", "pyannote"), ("nemotron", "nemotron"), ("不存在", "campp")):
+            p.write_text(json.dumps({"asr": {"model": "nano", "diarizer": v}}))
+            assert asr_engine.diarizer_mode() == want, v
+    finally:
+        if had and prev is not None:
+            p.write_bytes(prev)
+        elif p.exists():
+            p.unlink()
     print("ok 说话人分离方式：默认 CAM++，设置里选 pyannote 生效，未知值退回 CAM++")
 
 

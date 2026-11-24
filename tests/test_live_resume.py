@@ -296,5 +296,10 @@ async def main():
     return fails
 
 
+def test_live_resume():
+    n = asyncio.run(main())
+    assert n == 0, f"{n} 项录音续接集成测试失败"
+
+
 if __name__ == "__main__":
     sys.exit(1 if asyncio.run(main()) else 0)

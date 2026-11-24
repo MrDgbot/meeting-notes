@@ -1,0 +1,48 @@
+{
+  "name": "meeting-notes-desktop",
+  "version": "0.1.0",
+  "author": "Meeting Notes",
+  "private": true,
+  "description": "会议记录桌面客户端：Electron + React 19 + TypeScript + Python ASR Sidecar",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:mac:dir": "pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 --dir -c.mac.identity=null -c.mac.notarize=false",
+    "build:mac": "pnpm build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac -c.mac.identity=null -c.mac.notarize=false",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@electron-toolkit/utils": "^4.0.0",
+    "lucide-react": "^1.77.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  }
+}

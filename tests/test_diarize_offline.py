@@ -90,5 +90,9 @@ def main():
     print("全部通过")
 
 
+def test_diarize_offline():
+    main()
+
+
 if __name__ == "__main__":
     main()

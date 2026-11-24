@@ -1,41 +1,180 @@
-"""会议数据的本地文件存储：data/meetings/<id>/ 下放 meta.json、音频、转写、纪要等。"""
+import copy
 import json
+import logging
 import os
 import random
+import re
+import secrets
 import shutil
 import string
+import sys
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, NamedTuple, TypedDict
+
+log = logging.getLogger("store")
+
+MeetingStatus = Literal["new", "recording", "queued", "transcribing", "ready", "error"]
+MeetingSource = Literal["", "mic", "upload", "ambient"]
+
+
+class MeetingMeta(TypedDict, total=False):
+    id: str
+    title: str
+    title_auto: bool
+    created: str
+    status: MeetingStatus
+    source: MeetingSource
+    duration: float
+    num_spk: int
+    hotword: str
+    template: str
+    speakers: dict[str, str]
+    error: str
+
+
+class _FileSig(NamedTuple):
+    mtime_ns: int
+    size: int
+    ino: int
+
+
+class _MetaCacheKey(NamedTuple):
+    meetings_dir: str
+    mid: str
+
+
+class _MetaCacheEntry(NamedTuple):
+    sig: _FileSig
+    meta: dict
+
 
 BASE = Path(__file__).resolve().parent
-DATA = Path(os.environ.get("MEETING_DATA") or BASE / "data")  # 测试时可指到别的目录，不碰真实数据
+
+
+def _resolve_data_dir() -> Path:
+    env_dir = os.environ.get("MEETING_DATA")
+    if env_dir:
+        return Path(env_dir)
+    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
+        raise RuntimeError(
+            "Refusing to use real ./data under pytest without MEETING_DATA. "
+            "Set MEETING_DATA to a temporary directory before importing store."
+        )
+    return BASE / "data"
+
+
+DATA = _resolve_data_dir()
 MEETINGS = DATA / "meetings"
 MEETINGS.mkdir(parents=True, exist_ok=True)
 
 _lock = threading.RLock()
+_MID_RE = re.compile(r"[A-Za-z0-9_-]+")
+_DATE_ID_RE = re.compile(r"^\d{8}-")
+_meta_cache: dict[_MetaCacheKey, _MetaCacheEntry] = {}
+
+
+@contextmanager
+def locked():
+    with _lock:
+        yield
 
 
 def read_json(path: Path, default=None):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError, json.JSONDecodeError):
         return default
 
 
-def write_json(path: Path, obj) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+def _atomic_write(path: Path, writer, *, mode: int | None = None) -> None:
+    path = Path(path)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    create_mode = 0o666 if mode is None else mode
+    fd = os.open(str(tmp), flags, create_mode)
+    try:
+        if mode is not None and os.name != "nt":
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, mode)
+            else:
+                os.chmod(tmp, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = -1
+            writer(f)
+            f.flush()
+        os.replace(tmp, path)
+    except BaseException:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def write_json(path: Path, obj, *, mode: int | None = None) -> None:
+    _atomic_write(path, lambda f: json.dump(obj, f, ensure_ascii=False, indent=1), mode=mode)
+
+
+def write_text(path: Path, text: str, *, mode: int | None = None) -> None:
+    _atomic_write(path, lambda f: f.write(text), mode=mode)
+
+
+def _stat_sig(path: Path) -> _FileSig | None:
+    try:
+        st = path.stat()
+        return _FileSig(st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return None
+
+
+def _cache_key(mid: str) -> _MetaCacheKey:
+    return _MetaCacheKey(str(MEETINGS), mid)
+
+
+def _invalidate_meta(mid: str) -> None:
+    with _lock:
+        _meta_cache.pop(_cache_key(mid), None)
+
+
+def _load_meta_cached(d: Path, mid: str) -> dict | None:
+    mp = d / "meta.json"
+    sig = _stat_sig(mp)
+    if sig is None:
+        _invalidate_meta(mid)
+        return None
+    ck = _cache_key(mid)
+    with _lock:
+        hit = _meta_cache.get(ck)
+        if hit is not None and hit.sig == sig:
+            return copy.deepcopy(hit.meta)
+    m = read_json(mp)
+    if not isinstance(m, dict):
+        return None
+    with _lock:
+        if len(_meta_cache) > 4096:
+            _meta_cache.clear()
+        _meta_cache[ck] = _MetaCacheEntry(sig, copy.deepcopy(m))
+    return m
 
 
 def mdir(mid: str) -> Path:
-    if not mid or "/" in mid or ".." in mid:
-        raise ValueError("bad id")
-    return MEETINGS / mid
+    if not isinstance(mid, str) or not _MID_RE.fullmatch(mid):
+        raise ValueError("记录标识无效")
+    base = MEETINGS.resolve()
+    target = MEETINGS / mid
+    if target.resolve().parent != base:
+        raise ValueError("记录标识无效")
+    return target
 
 
 def exists(mid: str) -> bool:
@@ -45,56 +184,362 @@ def exists(mid: str) -> bool:
         return False
 
 
-def create(title: str = "", **fields) -> dict:
-    now = datetime.now()
-    mid = now.strftime("%Y%m%d-%H%M%S-") + "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-    d = MEETINGS / mid
-    d.mkdir(parents=True)
-    meta = {
-        "id": mid,
-        "title": title.strip() or now.strftime("会议 %m-%d %H:%M"),
-        "title_auto": not title.strip(),
-        "created": now.isoformat(timespec="seconds"),
-        "status": "new",  # new | recording | queued | transcribing | ready | error
-        "source": "",  # mic | upload
-        "duration": 0.0,
-        "num_spk": 0,
-        "hotword": "",
-        "template": "general",
-        "speakers": {},  # "0" -> "张三"
-        "error": "",
-    }
-    meta.update({k: v for k, v in fields.items() if v is not None})
-    write_json(d / "meta.json", meta)
-    return meta
+def create(title: str = "", **fields) -> MeetingMeta:
+    with _lock:
+        now = datetime.now()
+        mid = now.strftime("%Y%m%d-%H%M%S-") + "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+        d = MEETINGS / mid
+        d.mkdir(parents=True)
+        meta: MeetingMeta = {
+            "id": mid,
+            "title": title.strip() or now.strftime("会议 %m-%d %H:%M"),
+            "title_auto": not title.strip(),
+            "created": now.isoformat(timespec="seconds"),
+            "status": "new",
+            "source": "",
+            "duration": 0.0,
+            "num_spk": 0,
+            "hotword": "",
+            "template": "general",
+            "speakers": {},
+            "error": "",
+        }
+        meta.update({k: v for k, v in fields.items() if v is not None})
+        mp = d / "meta.json"
+        write_json(mp, meta)
+        sig = _stat_sig(mp)
+        if sig is not None:
+            _meta_cache[_cache_key(mid)] = _MetaCacheEntry(sig, copy.deepcopy(meta))
+        return meta
 
 
 def get(mid: str) -> dict | None:
-    return read_json(mdir(mid) / "meta.json")
+    return _load_meta_cached(mdir(mid), mid)
 
 
 def update(mid: str, **fields) -> dict:
     with _lock:
-        meta = get(mid)
+        d = mdir(mid)
+        meta = _load_meta_cached(d, mid)
         if meta is None:
             raise KeyError(mid)
         meta.update(fields)
-        write_json(mdir(mid) / "meta.json", meta)
+        mp = d / "meta.json"
+        write_json(mp, meta)
+        sig = _stat_sig(mp)
+        if sig is not None:
+            _meta_cache[_cache_key(mid)] = _MetaCacheEntry(sig, copy.deepcopy(meta))
+        else:
+            _meta_cache.pop(_cache_key(mid), None)
         return meta
 
 
 def list_all() -> list[dict]:
     out = []
-    for d in MEETINGS.iterdir():
-        m = read_json(d / "meta.json")
-        if m:
+    seen: set[str] = set()
+    try:
+        entries = list(os.scandir(MEETINGS))
+    except FileNotFoundError:
+        return []
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:
+            continue
+        mid = entry.name
+        seen.add(mid)
+        m = _load_meta_cached(Path(entry.path), mid)
+        if isinstance(m, dict):
             out.append(m)
-    out.sort(key=lambda m: m["created"], reverse=True)
+    base_str = str(MEETINGS)
+    with _lock:
+        for ck in [k for k in _meta_cache if k.meetings_dir == base_str and k.mid not in seen]:
+            _meta_cache.pop(ck, None)
+    out.sort(key=lambda m: str(m.get("created") or ""), reverse=True)
+    return out
+
+
+def list_by_date(date: str) -> list[dict]:
+    prefix = date.replace("-", "") + "-"
+    out = []
+    try:
+        entries = list(os.scandir(MEETINGS))
+    except FileNotFoundError:
+        return []
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:
+            continue
+        name = entry.name
+        if _DATE_ID_RE.match(name) and not name.startswith(prefix):
+            continue
+        m = _load_meta_cached(Path(entry.path), name)
+        if isinstance(m, dict) and str(m.get("created") or "")[:10] == date:
+            out.append(m)
+    out.sort(key=lambda m: str(m.get("created") or ""))
     return out
 
 
 def delete(mid: str) -> None:
-    shutil.rmtree(mdir(mid), ignore_errors=True)
+    with _lock:
+        target = mdir(mid)
+        _meta_cache.pop(_cache_key(mid), None)
+        shutil.rmtree(target, ignore_errors=True)
+
+
+_GENERIC_UPLOAD_RE = re.compile(
+    r"^(?:"
+    r"(?:img|rec|vid|aud|audio|recording|record|voice|memo|clip|sound|screen|zoom|meeting|微信语音|录音|通话录音|语音)[_\s\-]*\d*"
+    r"|\d{4}[\-_]?\d{2}[\-_]?\d{2}(?:[\-_T\s]+\d{2}[\-_:]?\d{2}(?:[\-_:]?\d{2})?)?"
+    r"|\d+"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def is_generic_upload_name(stem: str) -> bool:
+    s = (stem or "").strip()
+    if not s or len(s) <= 2:
+        return True
+    return bool(_GENERIC_UPLOAD_RE.fullmatch(s))
+
+
+TRASH_KEEP_S = 30 * 86400
+
+
+def _trash_root() -> Path:
+    return DATA / "trash"
+
+
+def _trash_dir(mid: str) -> Path:
+    return _trash_root() / mdir(mid).name
+
+
+def _trash_ts(d: Path) -> float:
+    info = read_json(d / "trash.json") or {}
+    raw = info.get("trashed_at")
+    if raw:
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except (TypeError, ValueError):
+            pass
+    try:
+        return d.stat().st_mtime
+    except OSError:
+        return time.time()
+
+
+def purge_expired_trash(now: float | None = None, keep_s: float = TRASH_KEEP_S) -> list[str]:
+    root = _trash_root()
+    if not root.exists():
+        return []
+    now = time.time() if now is None else now
+    gone = []
+    for d in list(root.iterdir()):
+        if not d.is_dir():
+            continue
+        if now - _trash_ts(d) > keep_s:
+            shutil.rmtree(d, ignore_errors=True)
+            gone.append(d.name)
+    return gone
+
+
+def trash_meeting(mid: str) -> dict:
+    with _lock:
+        purge_expired_trash()
+        src = mdir(mid)
+        if not (src / "meta.json").exists():
+            raise KeyError(mid)
+        meta = read_json(src / "meta.json") or {}
+        root = _trash_root()
+        root.mkdir(parents=True, exist_ok=True)
+        write_json(
+            src / "trash.json",
+            {
+                "id": mid,
+                "title": meta.get("title") or "",
+                "created": meta.get("created") or "",
+                "trashed_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
+        dest = _trash_dir(mid)
+        if dest.exists():
+            shutil.rmtree(dest)
+        _meta_cache.pop(_cache_key(mid), None)
+        shutil.move(str(src), str(dest))
+        return meta
+
+
+def list_trash() -> list[dict]:
+    root = _trash_root()
+    if not root.exists():
+        return []
+    out = []
+    for d in root.iterdir():
+        if not d.is_dir() or not (d / "meta.json").exists():
+            continue
+        meta = read_json(d / "meta.json") or {}
+        info = read_json(d / "trash.json") or {}
+        out.append(
+            {
+                "id": meta.get("id") or info.get("id") or d.name,
+                "title": meta.get("title") or info.get("title") or "未命名会议",
+                "created": meta.get("created") or info.get("created") or "",
+                "duration": float(meta.get("speech_s") or meta.get("duration") or 0.0),
+                "trashed_at": info.get("trashed_at") or "",
+            }
+        )
+    out.sort(key=lambda x: x.get("trashed_at") or "", reverse=True)
+    return out
+
+
+def restore_trash(mid: str) -> dict:
+    with _lock:
+        src = _trash_dir(mid)
+        if not (src / "meta.json").exists():
+            raise KeyError(mid)
+        dest = mdir(mid)
+        if dest.exists():
+            raise FileExistsError(mid)
+        (src / "trash.json").unlink(missing_ok=True)
+        shutil.move(str(src), str(dest))
+        _meta_cache.pop(_cache_key(mid), None)
+        meta = _load_meta_cached(dest, mid)
+        if not meta:
+            raise KeyError(mid)
+        return meta
+
+
+def purge_trash(mid: str) -> bool:
+    with _lock:
+        target = _trash_dir(mid)
+        if not target.exists():
+            return False
+        shutil.rmtree(target, ignore_errors=True)
+        return True
+
+
+DISCARDED = DATA / "discarded"
+DISCARD_KEEP_S = 7 * 86400
+
+
+def _discarded_dir(mid: str) -> Path:
+    return DISCARDED / mdir(mid).name
+
+
+def _discarded_ts(d: Path) -> float:
+    info = read_json(d / "discard.json") or {}
+    raw = info.get("discarded_at")
+    if raw:
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except (TypeError, ValueError):
+            pass
+    try:
+        return d.stat().st_mtime
+    except OSError:
+        return time.time()
+
+
+def _record_discard_telemetry(mid: str, info: dict, outcome: str) -> None:
+    try:
+        import rsi_ambient
+        rsi_ambient.record_discard_outcome(
+            mid,
+            float(info.get("voiced_s") or 0.0),
+            float(info.get("min_s") or 20.0),
+            outcome,
+            device=str(info.get("device") or ""),
+        )
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError) as exc:
+        log.debug("discard telemetry (%s) skipped for %s: %s", outcome, mid, exc)
+
+
+def purge_discarded(now: float | None = None, keep_s: float = DISCARD_KEEP_S) -> list[str]:
+    if not DISCARDED.exists():
+        return []
+    now = time.time() if now is None else now
+    gone = []
+    for d in list(DISCARDED.iterdir()):
+        if not d.is_dir():
+            continue
+        if now - _discarded_ts(d) > keep_s:
+            info = read_json(d / "discard.json") or {}
+            _record_discard_telemetry(info.get("id") or d.name, info, "purged_7d")
+            shutil.rmtree(d, ignore_errors=True)
+            gone.append(d.name)
+    return gone
+
+
+def recycle(mid: str, *, voiced_s: float, min_s: float, device: str = "") -> None:
+    with _lock:
+        purge_discarded()
+        src = mdir(mid)
+        if not (src / "meta.json").exists():
+            return
+        meta = read_json(src / "meta.json") or {}
+        DISCARDED.mkdir(parents=True, exist_ok=True)
+        write_json(src / "discard.json", {
+            "id": mid,
+            "time": meta.get("created") or meta.get("started_at") or "",
+            "voiced_s": voiced_s,
+            "min_s": min_s,
+            "device": device,
+            "discarded_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        dest = _discarded_dir(mid)
+        if dest.exists():
+            shutil.rmtree(dest)
+        _meta_cache.pop(_cache_key(mid), None)
+        shutil.move(str(src), str(dest))
+
+
+def list_discarded() -> list[dict]:
+    if not DISCARDED.exists():
+        return []
+    out = []
+    for d in DISCARDED.iterdir():
+        if not d.is_dir() or not (d / "meta.json").exists():
+            continue
+        meta = read_json(d / "meta.json") or {}
+        info = read_json(d / "discard.json") or {}
+        live = read_json(d / "live.json") or []
+        text = ""
+        if isinstance(live, list):
+            for seg in live:
+                if isinstance(seg, dict) and str(seg.get("text") or "").strip():
+                    text = str(seg["text"]).strip()
+                    break
+        out.append({
+            "id": meta.get("id") or info.get("id") or d.name,
+            "time": info.get("time") or meta.get("created") or "",
+            "voiced_s": info.get("voiced_s", 0),
+            "text": text,
+        })
+    out.sort(key=lambda x: x.get("time") or "", reverse=True)
+    return out
+
+
+def restore_discarded(mid: str) -> dict:
+    with _lock:
+        src = _discarded_dir(mid)
+        if not (src / "meta.json").exists():
+            raise KeyError(mid)
+        dest = mdir(mid)
+        if dest.exists():
+            raise FileExistsError(mid)
+        info = read_json(src / "discard.json") or {}
+        (src / "discard.json").unlink(missing_ok=True)
+        shutil.move(str(src), str(dest))
+        _meta_cache.pop(_cache_key(mid), None)
+        meta = _load_meta_cached(dest, mid)
+        if not meta:
+            raise KeyError(mid)
+    _record_discard_telemetry(mid, info, "restored")
+    return meta
 
 
 def load(mid: str, name: str, default=None):
@@ -105,7 +550,6 @@ def save(mid: str, name: str, obj) -> None:
     write_json(mdir(mid) / name, obj)
 
 
-# ---------- 设置（LLM 提供方） ----------
 SETTINGS = DATA / "settings.json"
 
 DEFAULT_SETTINGS = {
@@ -145,32 +589,42 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _normalize_settings_schema(raw: object) -> tuple[dict, bool]:
+    if not isinstance(raw, dict) or not raw:
+        return json.loads(json.dumps(DEFAULT_SETTINGS)), True
+    if "providers" not in raw:
+        migrated = dict(raw)
+        migrated["providers"] = json.loads(json.dumps(DEFAULT_SETTINGS["providers"]))
+        migrated.setdefault("active", DEFAULT_SETTINGS["active"])
+        return migrated, True
+    return raw, False
+
+
 def get_settings() -> dict:
-    s = read_json(SETTINGS)
-    if not s:
-        s = json.loads(json.dumps(DEFAULT_SETTINGS))
-        write_json(SETTINGS, s)
-    elif "providers" not in s:  # 文件缺项（手改过、旧版本）：补上默认的接口列表，用户删掉的接口不会被补回
-        s["providers"] = json.loads(json.dumps(DEFAULT_SETTINGS["providers"]))
-        s.setdefault("active", DEFAULT_SETTINGS["active"])
-        write_json(SETTINGS, s)
-    return s
+    with _lock:
+        s, dirty = _normalize_settings_schema(read_json(SETTINGS))
+        if dirty:
+            SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+            write_json(SETTINGS, s)
+        return s
 
 
 def save_settings(s: dict) -> None:
-    write_json(SETTINGS, s)
+    with _lock:
+        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        write_json(SETTINGS, s)
 
 
 def restore_default_providers() -> int:
-    """把被删掉的默认接口加回来（已有的不动），返回加回了几个。"""
-    s = get_settings()
-    have = {p["id"] for p in s["providers"]}
-    add = [json.loads(json.dumps(p)) for p in DEFAULT_SETTINGS["providers"] if p["id"] not in have]
-    s["providers"] += add
-    if not any(p["id"] == s.get("active") for p in s["providers"]):
-        s["active"] = s["providers"][0]["id"]
-    save_settings(s)
-    return len(add)
+    with _lock:
+        s = get_settings()
+        have = {p["id"] for p in s["providers"]}
+        add = [json.loads(json.dumps(p)) for p in DEFAULT_SETTINGS["providers"] if p["id"] not in have]
+        s["providers"] += add
+        if not any(p["id"] == s.get("active") for p in s["providers"]):
+            s["active"] = s["providers"][0]["id"]
+        save_settings(s)
+        return len(add)
 
 
 def provider(pid: str | None = None) -> dict:

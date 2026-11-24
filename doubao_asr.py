@@ -1,10 +1,12 @@
-"""憨包云端识别（实验性）。asr.AsrRequest protobuf over WSS，音频为 16k 单声道 Opus 20ms 帧。
+"""豆包云端识别（实验性）。asr.AsrRequest protobuf over WSS，音频为 16k 单声道 Opus 20ms 帧。
+协议参考 VoiceKey 的 doubao.rs。
 
 这是非公开接口，可能随时失效；调用方应在失败/无结果时回退本地模型。
-服务地址、应用标识、设备参数都不写在代码里，放在本机配置 data/hanbao.json（或环境变量 HANBAO_CONFIG 指向的文件），
+服务地址、应用标识、设备参数都不写在代码里，放在本机配置 data/doubao.json（或环境变量 DOUBAO_CONFIG 指向的文件），
 字段见 config()。没有配置时设置里不出现这个选项。用之前自己确认有权这样调用、符合对方的服务条款；录音会上传到对方服务器。
 """
 import asyncio
+import contextlib
 import ctypes
 import ctypes.util
 import json
@@ -22,18 +24,18 @@ import websockets
 
 import store
 
-log = logging.getLogger("hanbao")
+log = logging.getLogger("doubao")
 OK = 20_000_000
 FIRST, MIDDLE, LAST = 1, 3, 9
 FRAME = 320  # 20ms @ 16k
-DEVICE_FILE = store.DATA / "hanbao_device.json"
-CONFIG_FILE = Path(os.environ.get("HANBAO_CONFIG") or store.DATA / "hanbao.json")
+DEVICE_FILE = store.DATA / "doubao_device.json"
+CONFIG_FILE = Path(os.environ.get("DOUBAO_CONFIG") or store.DATA / "doubao.json")
 # ws_url、register_url：识别和设备注册的地址；user_agent、app_key；app、device：注册和连接时带的应用/设备参数
 # （app 里要有 aid、app_name）；register_body：注册请求体里另外要带的字段（可选）
 _NEED = ("ws_url", "register_url", "user_agent", "app_key", "app", "device")
 
 
-class HanbaoError(Exception):
+class DoubaoError(Exception):
     pass
 
 
@@ -47,7 +49,7 @@ def config() -> dict | None:
 def _cfg() -> dict:
     c = config()
     if not c:
-        raise HanbaoError(f"没有配置（{CONFIG_FILE.name}）")
+        raise DoubaoError(f"没有配置（{CONFIG_FILE.name}）")
     return c
 
 
@@ -94,7 +96,7 @@ def _pb_parse(buf: bytes) -> dict:
         elif wt in (1, 5):
             i += 8 if wt == 1 else 4
         else:
-            raise HanbaoError("protobuf 格式不支持")
+            raise DoubaoError("protobuf 格式不支持")
     return out
 
 
@@ -132,7 +134,7 @@ def _lib():
         try:
             lib = ctypes.CDLL(path)
         except OSError as e:
-            raise HanbaoError(f"找不到 libopus（macOS：brew install opus）：{e}") from e
+            raise DoubaoError(f"找不到 libopus（macOS：brew install opus）：{e}") from e
         lib.opus_encoder_create.restype = ctypes.c_void_p
         lib.opus_encoder_create.argtypes = [ctypes.c_int32, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_int)]
         lib.opus_encode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int16), ctypes.c_int, ctypes.c_char_p, ctypes.c_int32]
@@ -149,7 +151,7 @@ class _Encoder:
         err = ctypes.c_int()
         self.enc = _opus.opus_encoder_create(16000, 1, OPUS_VOIP, ctypes.byref(err))
         if not self.enc or err.value:
-            raise HanbaoError("Opus 编码器创建失败")
+            raise DoubaoError("Opus 编码器创建失败")
         _opus.opus_encoder_ctl(self.enc, SET_BITRATE, ctypes.c_int32(bitrate))
         _opus.opus_encoder_ctl(self.enc, SET_COMPLEXITY, ctypes.c_int32(complexity))
         self.buf = ctypes.create_string_buffer(4000)
@@ -163,12 +165,17 @@ class _Encoder:
         pcm = np.ascontiguousarray(pcm, dtype=np.int16)
         n = _opus.opus_encode(self.enc, pcm.ctypes.data_as(ctypes.POINTER(ctypes.c_int16)), len(pcm), self.buf, 4000)
         if n <= 0:
-            raise HanbaoError(f"Opus 编码失败 {n}")
+            raise DoubaoError(f"Opus 编码失败 {n}")
         return self.buf.raw[:n]
 
+    def close(self):
+        enc = getattr(self, "enc", None)
+        if enc and _opus is not None:
+            self.enc = None
+            _opus.opus_encoder_destroy(enc)
+
     def __del__(self):
-        if getattr(self, "enc", None):
-            _opus.opus_encoder_destroy(self.enc)
+        self.close()
 
 
 def _frames(audio: np.ndarray) -> list[np.ndarray]:
@@ -201,18 +208,22 @@ def _device_id() -> str:
         r = httpx.post(c["register_url"], params=q, timeout=10, headers={"User-Agent": c["user_agent"]},
                        json={**(c.get("register_body") or {}), "header": header, "_gen_time": int(now)})
         if r.status_code != 200:
-            raise HanbaoError(f"憨包设备注册 HTTP {r.status_code}")
+            raise DoubaoError(f"豆包设备注册 HTTP {r.status_code}")
         j = r.json() if r.content else {}
         did = str(j.get("device_id_str") or j.get("device_id") or "")
         if not did or did == "0":
-            raise HanbaoError("憨包设备注册被拒绝")
+            raise DoubaoError("豆包设备注册被拒绝")
         store.write_json(DEVICE_FILE, {"did": did})
-        log.info("hanbao device registered")
+        log.info("doubao device registered")
         return did
 
 
-def _reset_device():
+def _reset_device(expected_did: str | None = None):
     with _dev_lock:
+        if expected_did is not None:
+            cur = (store.read_json(DEVICE_FILE) or {}).get("did")
+            if cur and cur != expected_did:
+                return
         DEVICE_FILE.unlink(missing_ok=True)
 
 
@@ -229,7 +240,9 @@ class _Transcript:
         self.progress_at = time.monotonic()
 
     def text(self) -> str:
-        parts = [self.sentences[k] for k in sorted(self.sentences)] or [self.current]
+        parts = [self.sentences[k] for k in sorted(self.sentences)]
+        if self.current and (not parts or parts[-1] != self.current):
+            parts.append(self.current)
         out = ""
         for t in filter(None, parts):
             if out and not _cjk(out[-1]) and not _cjk(t[0]):
@@ -264,7 +277,9 @@ class _Transcript:
                 self.next_index = max(self.next_index, idx + 1)
                 self.current = ""
             else:
-                self.current = t
+                idx = r.get("index")
+                if idx is None or idx not in self.sentences:
+                    self.current = t
 
 
 def _cjk(c: str) -> bool:
@@ -276,23 +291,45 @@ async def _expect(ws, event: str):
     while True:
         r = _response(await asyncio.wait_for(ws.recv(), 10))
         if r["event"].endswith("Failed") or (r["event"] == event and r["status"] != OK):
-            raise HanbaoError(f"憨包 {r['event']} {r['status']}: {r['message']}")
+            raise DoubaoError(f"豆包 {r['event']} {r['status']}: {r['message']}")
         if r["event"] == event:
             return
 
 
-async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool, raw: bool) -> dict:
+def ddc_enabled() -> bool:
+    """豆包语义顺滑。设置里没写时默认开。"""
+    asr = store.get_settings().get("asr") or {}
+    if "doubao_ddc" in asr:
+        return bool(asr["doubao_ddc"])
+    return True
+
+
+def with_ddc(body: dict, enabled: bool | None = None) -> dict:
+    """文件识别请求里补上 enable_ddc。调用方已经写了就不改。"""
+    if "enable_ddc" in body:
+        return body
+    if enabled is None:
+        enabled = ddc_enabled()
+    return {**body, "enable_ddc": bool(enabled)}
+
+
+def session_body(rejection: bool, did: str, app_name: str, ddc: bool | None = None) -> dict:
+    return with_ddc({
+        "audio_info": {"channel": 1, "format": "speech_opus", "sample_rate": 16000},
+        "enable_punctuation": True,
+        "enable_speech_rejection": rejection,
+        "extra": {"app_name": app_name, "cell_compress_rate": 8, "did": did, "enable_asr_threepass": False,
+                  "enable_asr_twopass": True, "input_mode": "stream"},
+    }, ddc)
+
+
+async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool, raw: bool,
+                   ddc: bool | None = None) -> dict:
     c = _cfg()
     app_key, aid = c["app_key"], c["app"]["aid"]
     did = await asyncio.to_thread(_device_id)
     rid = str(uuid.uuid4())
-    session = json.dumps({
-        "audio_info": {"channel": 1, "format": "speech_opus", "sample_rate": 16000},
-        "enable_punctuation": True,
-        "enable_speech_rejection": rejection,
-        "extra": {"app_name": c["app"]["app_name"], "cell_compress_rate": 8, "did": did, "enable_asr_threepass": False,
-                  "enable_asr_twopass": True, "input_mode": "stream"},
-    })
+    session = json.dumps(session_body(rejection, did, c["app"]["app_name"], ddc))
     tr = _Transcript()
     async with websockets.connect(f"{c['ws_url']}?aid={aid}&device_id={did}", user_agent_header=c["user_agent"], open_timeout=10,
                                   additional_headers={"proto-version": "v2", "x-custom-keepalive": "true"},
@@ -302,8 +339,8 @@ async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool
             await _expect(ws, "TaskStarted")
             await ws.send(_request(app_key, "StartSession", session, b"", rid, 0))
             await _expect(ws, "SessionStarted")
-        except Exception:
-            _reset_device()
+        except DoubaoError:
+            _reset_device(did)
             raise
 
         async def receive():
@@ -312,10 +349,11 @@ async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool
                 if r["result"]:
                     tr.update(r["result"])
                 if r["event"].endswith("Failed"):
-                    raise HanbaoError(f"憨包 {r['event']} {r['status']}: {r['message']}")
+                    raise DoubaoError(f"豆包 {r['event']} {r['status']}: {r['message']}")
                 if r["event"] == "SessionFinished":
                     return
         rx = asyncio.create_task(receive())
+        enc = None
         try:
             enc, ts0 = _Encoder(), int(time.time() * 1000)
             frames = _frames(audio)
@@ -344,12 +382,17 @@ async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool
             await asyncio.wait_for(rx, 10 + len(frames) / 200)
         except Exception as e:
             if not tr.text():
-                if isinstance(e, HanbaoError) and "Failed" in str(e):
-                    _reset_device()
+                if isinstance(e, DoubaoError) and "Failed" in str(e):
+                    _reset_device(did)
                 raise
-            log.warning("hanbao session ended early but has text: %s", e)
+            log.warning("doubao session ended early but has text: %s", e)
         finally:
-            rx.cancel()
+            if enc is not None:
+                enc.close()
+            if not rx.done():
+                rx.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await rx
     out = {"text": tr.text()}
     if raw:
         out["raw"] = tr.raw
@@ -357,18 +400,19 @@ async def _session(audio: np.ndarray, speed: float, lead: float, rejection: bool
 
 
 async def recognize_async(audio: np.ndarray, speed: float = 4.0, lead: float = 10.0, rejection: bool = False,
-                          raw: bool = False, retries: int = 1) -> dict:
+                          raw: bool = False, retries: int = 1, ddc: bool | None = None) -> dict:
     """识别一段 16k float32 音频。speed/lead：发送倍速与最多领先实时的秒数。
-    rejection：服务端过滤背景人声（输入法默认开；会议/远场录音要关，否则远处说话大多返回空）。"""
+    rejection：服务端过滤背景人声（输入法默认开；会议/远场录音要关，否则远处说话大多返回空）。
+    ddc：语义顺滑，去掉重复啰嗦。不传就看设置，设置里没写则开。"""
     err = None
     for attempt in range(retries + 1):
         try:
-            return await _session(audio, speed, lead, rejection, raw)
+            return await _session(audio, speed, lead, rejection, raw, ddc)
         except Exception as e:  # noqa: BLE001
             err = e
-            log.info("hanbao attempt %d failed: %s", attempt + 1, e)
+            log.info("doubao attempt %d failed: %s", attempt + 1, e)
             await asyncio.sleep(0.5 + attempt)
-    raise HanbaoError(str(err))
+    raise DoubaoError(str(err))
 
 
 def recognize_many(segments: list[np.ndarray], concurrency: int = 6, **kw) -> list[dict | Exception]:

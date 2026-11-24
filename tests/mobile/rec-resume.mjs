@@ -97,6 +97,8 @@ await page.click("#rStop");
 await sleep(1500);
 const ban = await page.evaluate(() => (document.querySelector("#lostSlot") || {}).innerText || "");
 check(/正在把剩下的录音传到电脑/.test(ban), `断网时结束：提示“${ban.split("\n")[0]}”`);
+const stoppingUi = await page.evaluate(() => ({ pillHidden: document.querySelector("#recPill").hidden, stopT: REC.stopT }));
+check(!stoppingUi.pillHidden && stoppingUi.stopT === null, `断网停止期间：状态条保持可见且未挂残留 stopT`);
 await page.waitForFunction(() => !REC.active && !REC.stopping, null, { timeout: 30000 });
 const finalProduced = await page.evaluate(() => REC.next * 3200 + REC.dropped);
 await sleep(1500);

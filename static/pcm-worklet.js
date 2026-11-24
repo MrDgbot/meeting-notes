@@ -1,5 +1,6 @@
 // 把任意采样率的输入重采样为 16kHz 单声道 Int16，每 100ms 发送一次，并附带音量电平。
 // 先用加窗 sinc FIR 低通（截止 7.2kHz）抗混叠，再线性插值降采样。
+// 所有音频线程缓冲在构造函数里预分配并复用，避免每 2.67ms 音频量子产生 GC 抖动。
 class Pcm16k extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -14,7 +15,12 @@ class Pcm16k extends AudioWorkletProcessor {
     }
     for (let i = 0; i < N; i++) h[i] /= sum;
     this.h = h;
-    this.hist = new Float32Array(N - 1); // 上一块的尾部，用于跨块卷积
+    this.P = N - 1;
+    this.hist = new Float32Array(this.P); // 上一块的尾部，用于跨块卷积
+    this.cap = 128;
+    this.ext = new Float32Array(this.P + this.cap); // [hist | current mono input]
+    this.x = new Float32Array(this.cap + 1); // [prevX | current filtered samples]，用于跨块线性插值
+    this.prevX = 0;
     this.t = 0;
     this.out = new Int16Array(1600);
     this.n = 0;
@@ -23,31 +29,50 @@ class Pcm16k extends AudioWorkletProcessor {
   process(inputs) {
     const input = inputs[0];
     if (!input || !input.length || !input[0]) return true;
-    // 多声道取平均
     const len = input[0].length;
-    const raw = new Float32Array(len);
-    for (let c = 0; c < input.length; c++) {
-      const ch = input[c];
-      for (let i = 0; i < len; i++) raw[i] += ch[i] / input.length;
+    if (!len) return true;
+    const h = this.h, H = h.length, P = this.P;
+    if (len > this.cap) {
+      this.cap = len;
+      this.ext = new Float32Array(P + len);
+      this.x = new Float32Array(len + 1);
     }
-    // FIR 低通
-    const h = this.h, H = h.length, P = H - 1;
-    const ext = new Float32Array(P + len);
-    ext.set(this.hist, 0); ext.set(raw, P);
-    const x = new Float32Array(len);
-    for (let i = 0; i < len; i++) {
-      let acc = 0;
-      for (let k = 0; k < H; k++) acc += h[k] * ext[i + P - k];
-      x[i] = acc;
+    const ext = this.ext, hist = this.hist, x = this.x;
+    for (let i = 0; i < P; i++) ext[i] = hist[i];
+    // 单声道直拷，多声道取平均（直接写入 ext 后半段，无临时分配）
+    if (input.length === 1) {
+      const ch = input[0];
+      for (let i = 0; i < len; i++) ext[P + i] = ch[i];
+    } else {
+      const inv = 1 / input.length;
+      const ch0 = input[0];
+      for (let i = 0; i < len; i++) ext[P + i] = ch0[i] * inv;
+      for (let c = 1; c < input.length; c++) {
+        const ch = input[c];
+        for (let i = 0; i < len; i++) ext[P + i] += ch[i] * inv;
+      }
     }
-    if (P) this.hist = ext.slice(len);
+    // FIR 低通（x[0] 保留上一块末样本以平滑跨块线性插值）
+    x[0] = this.prevX;
+    if (P) {
+      for (let i = 0; i < len; i++) {
+        let acc = 0;
+        const base = i + P;
+        for (let k = 0; k < H; k++) acc += h[k] * ext[base - k];
+        x[i + 1] = acc;
+      }
+      for (let i = 0; i < P; i++) hist[i] = ext[len + i];
+    } else {
+      for (let i = 0; i < len; i++) x[i + 1] = ext[i];
+    }
+    this.prevX = x[len];
     let t = this.t;
     while (t < len) {
       const i = Math.floor(t), f = t - i;
-      const a = x[i], b = i + 1 < len ? x[i + 1] : x[i];
+      const a = x[i], b = x[i + 1];
       let v = a + (b - a) * f;
-      v = Math.max(-1, Math.min(1, v));
-      const av = Math.abs(v);
+      v = v < -1 ? -1 : v > 1 ? 1 : v;
+      const av = v < 0 ? -v : v;
       if (av > this.peak) this.peak = av;
       this.out[this.n++] = v < 0 ? v * 0x8000 : v * 0x7fff;
       if (this.n === this.out.length) {

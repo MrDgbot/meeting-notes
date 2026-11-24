@@ -2,16 +2,24 @@
 import bisect
 import json
 import logging
+import os
 import re
 import subprocess
+import sys
+import tempfile
 import threading
 import time
+import zlib
 from difflib import SequenceMatcher
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 import torch
+
+import diar_overlap
+import dual_audio
+import repetition
 from funasr import AutoModel
 from funasr.models.campplus import cluster_backend as _cb
 from funasr.models.campplus.utils import postprocess as _sv_postprocess, sv_chunk as _sv_chunk
@@ -22,7 +30,7 @@ import store
 # FunASR 谱聚类里的 k-means 没固定随机种子，同一段录音每次分出的人数/归属都可能不同；固定下来
 _cb.SpectralCluster.cluster_embs = lambda self, emb, k: _cb.k_means(emb, k, random_state=0, n_init=10)[1]
 
-# 不指定人数时的聚类后处理
+# 不指定人数时的聚类后处理（选法和测试结果见 docs/prereg-deviations.md D5）
 SV_STEP = 0.75        # 声纹小块的步长（秒），sv_chunk 的默认值
 SPK_MIN_SEC = 30      # 总时长不到这么多秒的说话人，逐块并进最近的人
 # 短录音按比例放低上面的门槛：门槛 = min(SPK_MIN_SEC, 语音总时长 × SPK_MIN_FRAC)。不然一两分钟的录音里除了说得最多的人谁都凑不够 30 秒，
@@ -35,16 +43,19 @@ SPLIT_MIN_MS = 1000
 # "campp" = CAM++ 声纹小块聚类（cluster_speakers），默认；近场录音（笔记本、手机放桌上）上明显更好。
 # "pyannote" = 子进程跑 pyannote community-1（diarize_worker.py）+ 用 CAM++ 声纹合并太像的说话人（PYA_MERGE_THR）；
 #   会议室远场、多人围坐抢话时人数和说话人更准，但会把近场长录音里说得最多的人拆成两个。失败时自动退回 CAM++。
+# "nemotron" = 子进程跑 NVIDIA Nemotron 3 Diarization（diarize_nemotron.py，约 100M，OpenMDW-1.1）。
+#   能标出重叠。公开远场集上曾经更好，但训练数据含 AISHELL-4，近场会议还没验证过，所以默认不切换。失败时退回 CAM++。
 DIARIZER = "campp"
 DIARIZERS = {
     "campp": "标准（推荐）：笔记本、手机放在桌上录，或线上会议",
     "pyannote": "会议室远场：多人围坐、离麦克风远、经常抢话（首次使用下载约 31 MB 模型）",
+    "nemotron": "Nemotron 3（可选）：重叠说话更敏感，最多 8 人。首次使用下载约 400MB；近场会议尚未验证，默认不启用",
 }
 PYA_MERGE_THR = 0.78
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
-    return v / np.linalg.norm(v, axis=-1, keepdims=True)
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
 
 
 def min_cluster_sec(segs: list) -> float:
@@ -150,7 +161,7 @@ NANO = "FunAudioLLM/Fun-ASR-Nano-2512"
 ASR_MODELS = {
     "nano": "Fun-ASR-Nano（推荐：远场、小声、口音、中英混说明显更准）",
     "paraformer": "Paraformer（更快、占内存少，近距离清晰录音够用）",
-    "hanbao": "憨包云端（会后精准转写更准，ASIN 等中英混说认得出；录音会上传到对方服务器，失败的段自动用本机 Nano 补）",
+    "doubao": "豆包云端（会后精准转写更准，ASIN 等中英混说认得出；录音会上传到字节服务器，失败的段自动用本机 Nano 补）",
 }
 LOCAL_MODES = ("nano", "paraformer")
 # 中文字符两侧的空格去掉（Nano 在句子之间会输出空格），英文单词之间的保留
@@ -168,8 +179,11 @@ def diarizer_mode() -> str:
     return m if m in DIARIZERS else "campp"
 
 
+MAX_HOTWORDS = 30  # 太多热词会让 Nano 在听不清的地方硬塞词，见 hotwords_credible
+
+
 def hotword_list(hotword: str) -> list[str]:
-    return [w for w in re.split(r"[\s,，、;；]+", hotword or "") if w]
+    return [w for w in re.split(r"[\s,，、;；]+", hotword or "") if w][:MAX_HOTWORDS]
 
 
 # Nano 偶尔把提示里的“热词列表：[…]”吐出来，或输出 [&] 之类的标记
@@ -200,6 +214,207 @@ def _sounds_like(word: str, heard: str) -> bool:
     best = max(sum(SequenceMatcher(None, a, b).ratio() for a, b in zip(wp, hp[i:i + n])) / n
                for i in range(len(hp) - n + 1))
     return best >= 0.7
+
+
+# 远场上 Nano 一次听太长会复读（维护者：重复多半是上一句上下文滚进去了；超过大约 10 秒就容易编）。
+NANO_MAX_SEG_S = 10.0
+CONTEXT_CHARS = 20  # 上一句只留末尾这么多字；60 字更容易被照抄、再滚进下一句
+CHARS_PER_SEC = 8  # 中文语速上限，用来限制这次最多生成多少字
+TOKEN_MARGIN = 8
+
+
+def has_repetition_run(text: str) -> bool:
+    """有没有单字连写或短语连写。还没到收束门槛的也算，这种上一句不能再送给模型。"""
+    n = len(text or "")
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch in repetition._PUNCT:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and text[j] == ch:
+            j += 1
+        if j - i >= 3:
+            return True
+        i = j
+    for i in range(n):
+        for length in range(2, min(24, n - i) + 1):
+            unit = text[i:i + length]
+            content = repetition._content(unit)
+            if len(content) < 2:
+                continue
+            rest = text[i + length:]
+            if rest.startswith(unit) or rest.startswith(content):
+                return True
+    return False
+
+
+def safe_context(text: str) -> str:
+    """能当上一句的末尾。有复读（收束后会变，或还有单字/短语连写）就整句不用。"""
+    text = " ".join((text or "").split())
+    if not text or repetition.collapse_repetition(text) != text or has_repetition_run(text):
+        return ""
+    return text[-CONTEXT_CHARS:]
+
+
+def recent_context(texts: list[str]) -> str:
+    """上一句的末尾，给实时识别当上下文。空句跳过；上一句自己在复读就不传。"""
+    for text in reversed(texts):
+        text = " ".join((text or "").split())
+        if text:
+            return safe_context(text)
+    return ""
+
+
+def apply_nano_context(prompt: str, context: str) -> str:
+    """把上一句塞进 Fun-ASR-Nano 提示里已有的「上下文信息」。没有上一句、或上一句在复读，就不动提示。
+
+    豆包和 Paraformer 没有这种提示位，调用方不要把整句塞进热词。
+    """
+    ctx = safe_context(context)
+    if not ctx:
+        return prompt
+    note = f"上一句转写（仅供参考，不要照抄）：{ctx}\n"
+    marker = "**上下文信息：**\n\n\n"
+    if marker in prompt:
+        return prompt.replace(marker, "**上下文信息：**\n" + note + "\n", 1)
+    return note + prompt
+
+
+def strip_context_echo(text: str, context: str) -> str:
+    """模型有时把提示里的上一句原样抄到开头。后面还有字才去掉，整句都是上一句就留下。"""
+    ctx = " ".join((context or "").split())
+    text = text or ""
+    if ctx and text.startswith(ctx) and len(text) > len(ctx) + 1:
+        return text[len(ctx):].lstrip("，。,. ")
+    return text
+
+
+def max_new_tokens_for(n_samples: int, sr: int = SR) -> int:
+    """按这段音频的时长限制生成长度：大约每秒 8 个汉字，再留一点余量。"""
+    dur = max(0.0, n_samples / float(sr or SR))
+    return max(TOKEN_MARGIN, int(round(dur * CHARS_PER_SEC + TOKEN_MARGIN)))
+
+
+def compression_ratio(text: str) -> float:
+    """zlib 压完之后原文是压缩结果的多少倍。复读很高，正常句子接近 1。"""
+    raw = (text or "").encode("utf-8")
+    if len(raw) < 8:
+        return 1.0
+    return len(raw) / len(zlib.compress(raw, 9))
+
+
+def repetition_delta(text: str) -> int:
+    text = text or ""
+    return len(text) - len(repetition.collapse_repetition(text))
+
+
+def looks_like_loop(text: str) -> bool:
+    """解码结果还像复读：压得太狠，或者收束之后短下去一截。"""
+    text = text or ""
+    if len(text) < 8:
+        return False
+    if compression_ratio(text) > 2.4:
+        return True
+    delta = repetition_delta(text)
+    return delta >= 8 or (delta > 0 and delta >= 0.25 * len(text))
+
+
+def pick_less_repetitive(a: str, b: str) -> str:
+    """两次解码里留比较不像复读的那次。后一次是空的就留前一次。"""
+    if not (b or "").strip():
+        return a or ""
+    if not (a or "").strip():
+        return b
+    ka = (compression_ratio(a), repetition_delta(a), len(a))
+    kb = (compression_ratio(b), repetition_delta(b), len(b))
+    return b if kb < ka else a
+
+
+def split_decode_spans(audio: np.ndarray, sr: int = SR, max_s: float = NANO_MAX_SEG_S) -> list[tuple[int, int]]:
+    """把超过 max_s 的音频切成几段再识别。有明显停顿就切在停顿上，否则切在时长上限。
+
+    返回的是样本下标 (开始, 结束)，拼起来盖住整段。每段不超过 max_s。
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    n = int(audio.shape[0])
+    max_n = int(max_s * sr)
+    if n == 0:
+        return []
+    if max_n <= 0 or n <= max_n:
+        return [(0, n)]
+    frame = max(1, int(0.02 * sr))
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while n - pos > max_n:
+        window_end = min(n, pos + max_n)
+        search_from = pos + min(max_n // 2, int(sr))
+        if search_from >= window_end - frame:
+            search_from = pos
+        energies = []
+        i = search_from
+        while i + frame <= window_end:
+            seg = audio[i:i + frame]
+            e = float(np.sqrt(np.mean(np.square(seg, dtype=np.float64)))) if len(seg) else 0.0
+            energies.append((e, i + frame // 2))
+            i += frame
+        cut = window_end
+        if energies:
+            vals = [e for e, _ in energies]
+            med = sorted(vals)[len(vals) // 2]
+            floor = min(vals)
+            if floor < med * 0.5 and floor < 0.02:
+                quiet = [idx for e, idx in energies if e <= floor * 1.5 + 1e-6]
+                cut = quiet[-1]
+        if cut <= pos:
+            cut = window_end
+        spans.append((pos, cut))
+        pos = cut
+    if pos < n:
+        spans.append((pos, n))
+    return spans
+
+
+def decode_capped(audio: np.ndarray, start_ms: int, end_ms: int, decode, hotword: str = "",
+                  context: str = "") -> list[dict]:
+    """先按大约 10 秒切开再识别。decode(clip, hotword, context) 返回文字。每段带自己的起止时间。"""
+    audio = np.asarray(audio, dtype=np.float32)
+    spans = split_decode_spans(audio)
+    ctx = safe_context(context)
+    n = len(audio)
+    span_ms = max(0, int(end_ms) - int(start_ms))
+    out = []
+    for i0, i1 in spans:
+        text = decode(audio[i0:i1], hotword, ctx) or ""
+        if not str(text).strip():
+            continue
+        if n and span_ms:
+            st = int(start_ms) + int(round(i0 / n * span_ms))
+            en = int(start_ms) + int(round(i1 / n * span_ms))
+        else:
+            st, en = int(start_ms), int(end_ms)
+        text = str(text).strip()
+        out.append({"start": st, "end": max(en, st), "text": text})
+        ctx = safe_context(text)
+    return out
+
+
+def nano_decode_guard(decode, audio: np.ndarray, hotword: str = "", context: str = "") -> dict:
+    """decode(hotword, context, max_new_tokens) -> {"text", "timestamps"}。
+
+    先按时长限制生成长度。结果还像复读，就再识别一次，不带上一句、也不带热词，留比较干净的那次。
+    """
+    limit = max_new_tokens_for(len(audio))
+    ctx = safe_context(context)
+    first = decode(hotword, ctx, limit) or {"text": "", "timestamps": []}
+    if not looks_like_loop(first.get("text") or ""):
+        return first
+    second = decode("", "", limit) or {"text": "", "timestamps": []}
+    chosen = pick_less_repetitive(first.get("text") or "", second.get("text") or "")
+    if chosen == (second.get("text") or "") and chosen != (first.get("text") or ""):
+        return second
+    return first
 
 
 def hotwords_credible(text: str, ctc: str, hotwords: list[str]) -> bool:
@@ -258,29 +473,62 @@ def level_pair(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return (y if LEVEL_USE == "all" else x), y
 
 
+def _tmp_audio_path(dst: Path, suffix: str) -> Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".tmp-", suffix=suffix, dir=dst.parent)
+    os.close(fd)
+    return Path(name)
+
+
 def to_wav16k(src: str | Path, dst: str | Path) -> None:
-    p = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-vn", "-ar", "16000", "-ac", "1", str(dst)],
-        capture_output=True, text=True,
-    )
-    if p.returncode != 0:
-        raise RuntimeError("音频解码失败: " + p.stderr.strip()[:300])
+    dst_p = Path(dst)
+    tmp = _tmp_audio_path(dst_p, ".wav")
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp)],
+            capture_output=True, text=True,
+        )
+        if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            raise RuntimeError("音频解码失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
+        os.replace(tmp, dst_p)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
-def pcm_to_wav(pcm: Path, wav: Path) -> None:
-    p = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", str(pcm), str(wav)],
-        capture_output=True, text=True,
-    )
-    if p.returncode != 0:
-        raise RuntimeError("录音保存失败: " + p.stderr.strip()[:300])
+def pcm_to_wav(pcm: Path, wav: Path, channels: int = 1) -> None:
+    """channels=2 时保留麦克风 / 电脑声音两路，不在这里混成单声道。"""
+    channels = dual_audio.channels_of(channels)
+    wav_p = Path(wav)
+    tmp = _tmp_audio_path(wav_p, ".wav")
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-f", "s16le", "-ar", "16000", "-ac", str(channels),
+             "-i", str(pcm), "-f", "wav", str(tmp)],
+            capture_output=True, text=True,
+        )
+        if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            raise RuntimeError("录音保存失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
+        os.replace(tmp, wav_p)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def make_mp3(wav: Path, mp3: Path) -> None:
-    subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-y", "-i", str(wav), "-b:a", "64k", str(mp3)],
-        capture_output=True,
-    )
+    mp3_p = Path(mp3)
+    tmp = _tmp_audio_path(mp3_p, ".mp3")
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(wav), "-b:a", "64k", "-f", "mp3", str(tmp)],
+            capture_output=True, text=True,
+        )
+        if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            raise RuntimeError("MP3 编码失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
+        os.replace(tmp, mp3_p)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def duration_of(path: Path) -> float:
@@ -292,6 +540,10 @@ def duration_of(path: Path) -> float:
         return float(out)
     except ValueError:
         return 0.0
+
+
+_OFFLINE_VADS: dict[tuple, object] = {}
+_OFFLINE_VAD_LOCK = threading.Lock()
 
 
 class Engine:
@@ -309,22 +561,25 @@ class Engine:
         gpu = threading.RLock()
         self.full_lock = self.live_lock = self.punc_lock = self.nano_lock = gpu
         self.load_lock = threading.Lock()
+        self._state_lock = threading.Lock()  # “检查是否在加载 + 置上加载中”要一起做，防止连点重试时并发加载两遍
         self._last_trim = 0.0
         self.last_info: dict = {}  # 最近一次会后转写用了什么引擎、云端失败几段等
+        self.last_spk_embs: dict | None = None  # 最近一次说话人分离的 CAM++ 声纹质心（供 Loop A 跨会识人）
         self.common = dict(device=DEVICE, disable_update=True, disable_pbar=True, disable_log=True)
 
     def load(self):
         """加载语音模型。启动时调用一次；加载失败后可从网页上点“重试”再调用。"""
-        if self.loading or self.ready:
-            return
-        self.loading, self.error = True, ""
+        with self._state_lock:
+            if self.loading or self.ready:
+                return
+            self.loading, self.error = True, ""
         try:
             t = time.time()
             if self.full is None:
                 self.full = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc",
                                       spk_model="cam++", **self.common)
             self.ensure(asr_mode())
-            self.new_vad()
+            self._get_offline_vad(None)
             self.trim(force=True)
             self.ready = True
             log.info("ASR models ready on %s in %.1fs (mode=%s)", DEVICE, time.time() - t, asr_mode())
@@ -334,11 +589,32 @@ class Engine:
         finally:
             self.loading = False
 
+    def state_info(self) -> dict:
+        """语音模型的两个状态机（只读）：主模型 idle → loading → ready / error（error 可重试回 loading）；
+        Nano unloaded → loading → ready / failed（failed 后不自动重试，切换模型或手动重试时 force 重载）。"""
+        if self.ready:
+            main = "ready"
+        elif self.loading:
+            main = "loading"
+        elif self.error:
+            main = "error"
+        else:
+            main = "idle"
+        if self.nano_loading:
+            nano = "loading"
+        elif self.nano is not None:
+            nano = "ready"
+        elif self.nano_error:
+            nano = "failed"
+        else:
+            nano = "unloaded"
+        return {"main": main, "error": self.error, "nano": nano, "nano_error": self.nano_error}
+
     def ensure(self, mode: str, force: bool = False) -> str:
         """按需加载本机识别模型；Nano 加载失败时退回 Paraformer。返回实际可用的本机模式。
-        憨包模式下实时出字和失败回退都用本机 Nano。
+        豆包模式下实时出字和失败回退都用本机 Nano。
         Nano 加载失败一次后不再自动重试（否则每识别一句都要重新加载、占着 GPU 锁），force=True 时才重试。"""
-        if mode == "hanbao":
+        if mode == "doubao":
             mode = "nano"
         if mode == "nano" and self.nano is None and self.nano_error and not force:
             mode = "paraformer"
@@ -372,21 +648,37 @@ class Engine:
                          disable_update=True, disable_pbar=True, disable_log=True, **kw)
 
     @staticmethod
+    def _get_offline_vad(vad_kw: dict | None = None):
+        kw = dict(vad_kw or {})
+        key = tuple(sorted(kw.items()))
+        with _OFFLINE_VAD_LOCK:
+            vad = _OFFLINE_VADS.get(key)
+            if vad is None:
+                vad = AutoModel(model="fsmn-vad", max_single_segment_time=30000, device="cpu",
+                                disable_update=True, disable_pbar=True, disable_log=True, **kw)
+                _OFFLINE_VADS[key] = vad
+            return vad
+
+    @staticmethod
     def _offline_segs(x: np.ndarray, vad_kw: dict | None = None) -> list:
-        """整段音频的语音段 [[开始ms, 结束ms]]。用 VAD 默认参数：会把相邻语音并成最长 30 秒的大段。"""
-        vad = AutoModel(model="fsmn-vad", max_single_segment_time=30000, device="cpu",
-                        disable_update=True, disable_pbar=True, disable_log=True, **(vad_kw or {}))
-        return vad.generate(input=x)[0]["value"]
+        """整段音频的语音段 [[开始ms, 结束ms]]。缓存 CPU 离线 VAD 模型避免每次转写重载（保持 FunASR 默认 dynamic_silence 行为不变，见 docs/direction-evidence.md）。"""
+        vad = Engine._get_offline_vad(vad_kw)
+        with _OFFLINE_VAD_LOCK:
+            return vad.generate(input=x)[0]["value"]
 
     def trim(self, force: bool = False, every: float = 20.0):
         """释放 MPS / CUDA 缓存。输入长度每次不同，PyTorch 的 MPS 缓存会只涨不降（实测 300 次识别涨 6GB），
-        定期 empty_cache 即可回落；它只释放空闲块，不影响正在进行的推理。"""
+        定期 empty_cache 即可回落；在 GPU 锁内调用，避免与并发 MPS 推理互相竞争。"""
         if DEVICE not in ("mps", "cuda"):
             return
         now = time.time()
-        if force or now - self._last_trim >= every:
-            self._last_trim = now
-            (torch.cuda if DEVICE == "cuda" else torch.mps).empty_cache()
+        if not force and now - self._last_trim < every:
+            return
+        with self.full_lock:
+            now = time.time()
+            if force or now - self._last_trim >= every:
+                self._last_trim = now
+                (torch.cuda if DEVICE == "cuda" else torch.mps).empty_cache()
 
     # ---------- 标点 ----------
     def repunc(self, text: str) -> str:
@@ -399,49 +691,115 @@ class Engine:
         except Exception:  # noqa: BLE001
             return text
 
-    def _nano(self, audio: np.ndarray, hotword: str = "") -> dict:
+    def _nano(self, audio: np.ndarray, hotword: str = "", context: str = "") -> dict:
         hws = hotword_list(hotword)
-        x = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
 
-        def run(with_hw: bool) -> dict:
-            kw = {"hotwords": hws} if with_hw and hws else {}
+        def once(with_hw: bool, with_ctx: bool, limit: int) -> dict:
+            ctx = safe_context(context) if with_ctx else ""
+            x = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+            kw = {"max_length": int(limit)}
+            if with_hw and hws:
+                kw["hotwords"] = hws
             with self.nano_lock:
-                r = self.nano.generate(input=x, language="中文", itn=True, **kw)
-            return r[0] if r else {}
-        r = run(True)
-        if hws and not hotwords_credible(r.get("text") or "", r.get("ctc_text") or "", hws):
-            log.info("hotword not credible, re-decode without: %r (ctc %r)", r.get("text"), r.get("ctc_text"))
-            r = run(False)
-        # LLM 解码在噪声上偶尔会“编”出一句话；此时 CTC 分支是空的，据此丢掉
-        if not (r.get("ctc_text") or "").strip():
-            return {"text": "", "timestamps": []}
-        text = re.sub(r"\[[^\]\[]{0,4}\]|[\[\]]", "", r.get("text") or "")
-        text = SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip()))
-        return {"text": text, "timestamps": r.get("timestamps") or []}
+                model = getattr(self.nano, "model", None)
+                orig = getattr(model, "get_prompt", None) if model is not None and ctx else None
+                if orig:
+                    def get_prompt(hotwords, language=None, itn=True):
+                        return apply_nano_context(orig(hotwords if hotwords else [], language, itn), ctx)
+                    model.get_prompt = get_prompt
+                try:
+                    raw = self.nano.generate(input=x, language="中文", itn=True, **kw)
+                finally:
+                    if orig:
+                        model.get_prompt = orig
+            raw = raw[0] if raw else {}
+            ctc = raw.get("ctc_text") or ""
+            if not str(ctc).strip():
+                return {"text": "", "raw_text": "", "timestamps": [], "ctc_text": ""}
+            raw_text = raw.get("text") or ""
+            text = re.sub(r"\[[^\]\[]{0,4}\]|[\[\]]", "", raw_text)
+            text = SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip()))
+            return {"text": text, "raw_text": raw_text, "timestamps": raw.get("timestamps") or [], "ctc_text": ctc}
 
-    def asr_segment(self, audio: np.ndarray, hotword: str = "", punc: bool = True) -> str:
-        """识别一小段 16k float32 音频（几百毫秒到几十秒）。"""
+        limit = max_new_tokens_for(len(audio))
+
+        # 热词听着不像（或原始输出泄露了提示括号）时先去掉热词再认一次（仍可带上一句）；复读则再去掉上一句和热词
+        first = once(True, True, limit)
+        if hws:
+            txt0 = first.get("text") or ""
+            ctc0 = first.get("ctc_text") or ""
+            raw0 = first.get("raw_text") or ""
+            present = [w for w in hws if w.lower() in txt0.lower()]
+            leak = bool(PROMPT_LEAK_RE.search(raw0))
+            bad = [w for w in present if not _sounds_like(w, ctc0)]
+            if leak or bad:
+                try:
+                    import rsi_vocab
+                    rej = bad or [w for w in hws if w.lower() in raw0.lower()]
+                    if rej:
+                        rsi_vocab.record_ctc_result([], rej)
+                except Exception:  # noqa: BLE001
+                    log.debug("rsi_vocab record_ctc_result failed", exc_info=True)
+                log.info("hotword not credible, re-decode without: %r (ctc %r)", raw0 or txt0, ctc0)
+                first = once(False, True, limit)
+            elif present:
+                try:
+                    import rsi_vocab
+                    rsi_vocab.record_ctc_result(present, [])
+                except Exception:  # noqa: BLE001
+                    log.debug("rsi_vocab record_ctc_result failed", exc_info=True)
+        if looks_like_loop(first.get("text") or ""):
+            second = once(False, False, limit)
+            chosen = pick_less_repetitive(first.get("text") or "", second.get("text") or "")
+            if chosen == (second.get("text") or "") and chosen != (first.get("text") or ""):
+                log.info("repetition guard kept re-decode: %r -> %r", first.get("text"), second.get("text"))
+                first = second
+        return {"text": first.get("text") or "", "timestamps": first.get("timestamps") or []}
+
+    def asr_segment(self, audio: np.ndarray, hotword: str = "", punc: bool = True, context: str = "") -> str:
+        """识别一小段 16k float32 音频（几百毫秒到几十秒）。
+
+        context 是上一句文字。Fun-ASR-Nano 能放进提示；Paraformer 没有这个入口，忽略。
+        Nano 超过大约 10 秒会先切开再认，避免远场整段解码复读。
+        """
         if len(audio) < SR * 0.2:
             return ""
         if self.ensure(asr_mode()) == "nano":
-            text = self._nano(audio, hotword)["text"]
+            ctx = safe_context(context)
+            texts = []
+            for i0, i1 in split_decode_spans(audio):
+                raw = self._nano(audio[i0:i1], hotword, ctx)["text"]
+                text = repetition.collapse_repetition(strip_context_echo(raw, ctx))
+                if text:
+                    texts.append(text)
+                    ctx = safe_context(text)
             self.trim()
-            return text
-        kw = {"hotword": hotword} if hotword else {}
+            return "".join(texts)
+        capped = " ".join(hotword_list(hotword))
+        kw = {"hotword": capped} if capped else {}
         with self.live_lock:
             r = self.live_asr.generate(input=audio, **kw)
         text = (r[0].get("text") or "").strip() if r else ""
         text = self.repunc(text) if (text and punc) else text
         self.trim()
-        return text
+        return repetition.collapse_repetition(text)
 
     # ---------- 会后整段转写 ----------
     def transcribe(self, wav: Path, num_spk: int = 0, hotword: str = "", vad_kw: dict | None = None) -> list[dict]:
         """vad_kw：切分语音用的 VAD 参数。全天模式的录音传和采集时相同的灵敏度，
-        否则采集时录下的小声发言，到这里又被当成静音丢掉。"""
+        否则采集时录下的小声发言，到这里又被当成静音丢掉。
+        双声道（麦克风 | 电脑声音）两路分开转写再按时间合并，抢话时两路都留。"""
         self.last_info = {}
+        self.last_spk_embs = None
+        try:
+            nch = sf.info(str(wav)).channels
+        except Exception:  # noqa: BLE001
+            nch = 1
+        if nch and nch >= 2:
+            x, sr = sf.read(str(wav), dtype="float32", always_2d=True)
+            return self._transcribe_stereo(x, int(sr), hotword, vad_kw)
         cloud_failed = ""
-        if asr_mode() == "hanbao":
+        if asr_mode() == "doubao":
             try:
                 paras = self._cloud_transcribe(wav, num_spk, hotword, vad_kw)
                 if paras is not None:
@@ -449,10 +807,10 @@ class Engine:
                     return paras
                 cloud_failed = self.last_info.get("error") or "大部分片段识别失败"
             except Exception as e:  # noqa: BLE001
-                log.exception("hanbao transcribe failed, falling back to local")
+                log.exception("doubao transcribe failed, falling back to local")
                 cloud_failed = f"{type(e).__name__}: {e}"[:200]
         mode = self.ensure(asr_mode())
-        # 憨包整体失败改用本机时记下原因，网页上显示“憨包云端失败，已改用本机识别”
+        # 豆包整体失败改用本机时记下原因，网页上显示“豆包云端失败，已改用本机识别”
         self.last_info = {"engine": mode, **({"cloud_failed": cloud_failed} if cloud_failed else {})}
         if asr_mode() == "nano" and mode != "nano" and self.nano_error:
             self.last_info["nano_failed"] = self.nano_error
@@ -462,13 +820,16 @@ class Engine:
                 paras = self._paragraphs(self._nano_transcribe(wav, num_spk, hotword, vad_kw))
                 self.trim(force=True)
                 return paras
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 log.exception("nano transcribe failed, falling back to paraformer")
+                self.last_info["engine"] = "paraformer"
+                self.last_info["nano_failed"] = f"{type(e).__name__}: {e}"[:200]
         kw = {"batch_size_s": 300}
         if num_spk and num_spk > 0:
             kw["preset_spk_num"] = int(num_spk)
-        if hotword.strip():
-            kw["hotword"] = hotword.strip()
+        capped = " ".join(hotword_list(hotword))
+        if capped:
+            kw["hotword"] = capped
         inp: str | np.ndarray = str(wav)
         if LEVEL_USE != "off":  # Paraformer 管线自带 VAD，分不开：音量归一后整段送进去（相当于 "all"）
             xw, _ = sf.read(str(wav), dtype="float32")
@@ -480,23 +841,75 @@ class Engine:
                 sents = [{"spk": 0, "start": 0, "end": int(duration_of(wav) * 1000), "text": res["text"]}]
             paras = self._paragraphs(sents)
             for p in paras:
-                p["text"] = self.repunc(p["text"])
+                p["text"] = repetition.collapse_repetition(self.repunc(p["text"]))
         self.trim(force=True)
         return paras
 
+    def _transcribe_stereo(self, x: np.ndarray, sr: int, hotword: str, vad_kw: dict | None) -> list[dict]:
+        """两路各自走原来的单声道流程（人数自动判断），再去掉串音、错开说话人编号。"""
+        groups: list[dict] = []
+        base = 0
+        per: list[dict] = []
+        merged_embs: dict[str, dict] = {}
+        emb_dim = 0
+        emb_diar = ""
+        for ch in range(min(2, x.shape[1])):
+            fd, name = tempfile.mkstemp(suffix=".wav", prefix=f"mn-ch{ch}-")
+            os.close(fd)
+            path = Path(name)
+            try:
+                sf.write(str(path), np.ascontiguousarray(x[:, ch]), sr)
+                part = self.transcribe(path, 0, hotword, vad_kw)
+            finally:
+                path.unlink(missing_ok=True)
+            per.append(dict(self.last_info))
+            ch_embs = getattr(self, "last_spk_embs", None)
+            if isinstance(ch_embs, dict) and isinstance(ch_embs.get("speakers"), dict):
+                emb_dim = emb_dim or int(ch_embs.get("dim") or 0)
+                emb_diar = emb_diar or str(ch_embs.get("diarizer") or "")
+                for sk, entry in ch_embs["speakers"].items():
+                    if str(sk).isdigit():
+                        merged_embs[str(int(sk) + base)] = entry
+            for p in part:
+                item = dict(p)
+                item["ch"] = ch
+                item["spk"] = int(item.get("spk", 0)) + base
+                if item.get("spks"):
+                    item["spks"] = [int(s) + base for s in item["spks"]]
+                a = max(0, int(item["start"] * sr / 1000))
+                b = min(len(x), max(a, int(item["end"] * sr / 1000)))
+                seg = x[a:b, ch]
+                item["rms"] = float(np.sqrt(np.mean(np.square(seg, dtype=np.float64)))) if len(seg) else 0.0
+                groups.append(item)
+            mine = [g for g in groups if g["ch"] == ch]
+            if mine:
+                base = max(g["spk"] for g in mine) + 1
+        kept = dual_audio.drop_bleed(groups)
+        for p in kept:
+            p.pop("rms", None)
+        info: dict = {"channels": 2, "engine": (per[-1] or {}).get("engine") if per else "",
+                      "diarizer": (per[-1] or {}).get("diarizer") if per else "", "per_channel": per}
+        for k in ("cloud_failed", "diarizer_failed", "nano_failed"):
+            val = next((p.get(k) for p in per if p and p.get(k)), "")
+            if val:
+                info[k] = val
+        self.last_info = info
+        self.last_spk_embs = {"version": 1, "diarizer": emb_diar or "campp", "dim": emb_dim, "speakers": merged_embs} if merged_embs else None
+        return kept
+
     def _cloud_transcribe(self, wav: Path, num_spk: int, hotword: str, vad_kw: dict | None = None) -> list[dict] | None:
-        """憨包云端识别文字，本机做 VAD + 说话人分离。
-        憨包只给整段文字、没有逐字时间，所以先按说话人把语音切成单元（见 _speaker_units），
+        """豆包云端识别文字，本机做 VAD + 说话人分离。
+        豆包只给整段文字、没有逐字时间，所以先按说话人把语音切成单元（见 _speaker_units），
         每个单元整段识别，说话人直接取单元的。云端失败/没出字的单元用本机模型补。
         大部分单元都失败（断网、接口失效）时返回 None，整场改走本机流程。"""
-        import hanbao_asr
+        import doubao_asr
         x, sr = sf.read(str(wav), dtype="float32")
         if x.ndim > 1:
             x = x[:, 0]
         x, xv = level_pair(x)
         segs = self._offline_segs(xv, vad_kw)
         if not segs:
-            self.last_info = {"engine": "hanbao", "units": 0}
+            self.last_info = {"engine": "doubao", "units": 0}
             return []
         turns = self._diarize(x, segs, num_spk, wav=wav)
         units = self._speaker_units(segs, turns)
@@ -507,33 +920,38 @@ class Engine:
             e = min(e + 200, units[i + 1][0] if i + 1 < len(units) else total_ms)
             clips.append(x[int(s * SR / 1000):int(e * SR / 1000)])
         t = time.time()
-        # 憨包把很小声的段当成没人说话（实测没出字的段音量中位数 -34dB，出字的 -28dB）；
+        # 豆包把很小声的段当成没人说话（实测没出字的段音量中位数 -34dB，出字的 -28dB）；
         # 小声的段先放大到 -22dB 再发，能多认出约四成。本机补的时候仍用原始音频
-        res = hanbao_asr.recognize_many([_boost(c) for c in clips], concurrency=16)  # 实测 16 路无报错，比 8 路快近一倍
+        res = doubao_asr.recognize_many([_boost(c) for c in clips], concurrency=16)  # 实测 16 路无报错，比 8 路快近一倍
         errs = [r for r in res if isinstance(r, Exception)]
-        log.info("hanbao: %d units in %.1fs, %d failed%s", len(res), time.time() - t, len(errs),
+        log.info("doubao: %d units in %.1fs, %d failed%s", len(res), time.time() - t, len(errs),
                  f" ({errs[0]!r})" if errs else "")
         if len(errs) > max(2, len(res) // 2):
             self.last_info = {"error": f"{len(errs)}/{len(res)} 段失败：{errs[0]}"[:200]}
             return None
+        import context_hotwords
+        correct = context_hotwords.make_lexicon_corrector(hotword)
         sents, n_local = [], 0
         for (s, e, spk), clip, r in zip(units, clips, res):
             text = "" if isinstance(r, Exception) else r["text"]
-            if not text.strip() and len(clip) >= SR * 1.5:  # 云端失败/没出字：本机补
+            if not text.strip() and len(clip) >= SR * 1.5:  # 云端失败/没出字：本机补（本机模型接受热词）
                 text = self.asr_segment(clip, hotword)
                 n_local += bool(text)
-            text = SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip()))
+            elif text.strip():
+                # 豆包这个接口不接受热词，改在转写后按词库和上下文纠错
+                text = correct(text)
+            text = repetition.collapse_repetition(SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip())))
             if text:
                 sents.append({"spk": spk, "start": s, "end": e, "text": text})
         self.last_info = {**{k: v for k, v in self.last_info.items() if k.startswith("diarizer")},
-                          "engine": "hanbao", "units": len(units), "failed": len(errs), "local": n_local}
+                          "engine": "doubao", "units": len(units), "failed": len(errs), "local": n_local}
         return self._paragraphs(sents)
 
     @staticmethod
     def _speaker_units(segs: list, turns: list[tuple], min_turn: int = 2000, gap: int = 3000,
                        max_len: int = 25000) -> list[list[int]]:
-        """切成发给憨包的识别单元，返回 [[开始ms, 结束ms, 说话人]]。
-        憨包对一两秒的短音频大多返回空（实测单个 VAD 段中位数才 1 秒，单独发近六成没出字；
+        """切成发给豆包的识别单元，返回 [[开始ms, 结束ms, 说话人]]。
+        豆包对一两秒的短音频大多返回空（实测单个 VAD 段中位数才 1 秒，单独发近六成没出字；
         停顿 ≤3s 的合起来发，没出字的降到 0，认出的字多 26%），所以要尽量切长：
         1. VAD 段在说话人切换处切成片段，同一人连续的片段归成一轮；
         2. 说话时长不足 min_turn 的一轮视为声纹抖动或附和，并入时间上更近的相邻一轮（相隔不超过 gap 才并）；
@@ -544,14 +962,36 @@ class Engine:
             if not ov:
                 pieces.append([s, e, Engine._spk_at(turns, s, e) if turns else 0])
                 continue
-            first = len(pieces)
-            for a, _, spk in ov:
-                if len(pieces) > first and pieces[-1][2] == spk:
-                    continue
-                if len(pieces) > first:
-                    pieces[-1][1] = a
-                pieces.append([a, e, spk])
-            pieces[first][0] = s
+            has_ov = any(ov[k][0] < ov[k - 1][1] for k in range(1, len(ov)))
+            if not has_ov:
+                first = len(pieces)
+                for a, _, spk in ov:
+                    if len(pieces) > first and pieces[-1][2] == spk:
+                        continue
+                    if len(pieces) > first:
+                        pieces[-1][1] = a
+                    pieces.append([a, e, spk])
+                pieces[first][0] = s
+            else:
+                # 允许重叠的说话人分离（如 Nemotron）：按所有边界点切分，保留嵌套外层说话人、不产生零长度片段
+                pts = sorted({s, e, *(p for a, b, _ in ov for p in (a, b))})
+                seg_pieces: list[list[int]] = []
+                for x0, x1 in zip(pts, pts[1:]):
+                    if x1 <= x0:
+                        continue
+                    active = [(a, b, spk) for a, b, spk in ov if a <= x0 and x1 <= b]
+                    if active:
+                        # 多人同时在说时归给该段内覆盖更长的说话人（再按先出现、编号小打破平局）
+                        spk = max(active, key=lambda t: (t[1] - t[0], -t[0], -t[2]))[2]
+                    elif seg_pieces:
+                        spk = seg_pieces[-1][2]
+                    else:
+                        spk = ov[0][2]
+                    if seg_pieces and seg_pieces[-1][2] == spk:
+                        seg_pieces[-1][1] = x1
+                    else:
+                        seg_pieces.append([x0, x1, spk])
+                pieces.extend(seg_pieces)
         # runs: [片段列表, 说话人, 说话时长]
         runs: list[list] = []
         for p in pieces:
@@ -599,9 +1039,9 @@ class Engine:
         return units
 
     def _diarize_pyannote(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
-        import sys
-        import tempfile
-        out = Path(tempfile.mkstemp(suffix=".json", prefix="diar-")[1])
+        fd, name = tempfile.mkstemp(suffix=".json", prefix="diar-")
+        os.close(fd)
+        out = Path(name)
         try:
             p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_worker.py")), str(wav), str(out),
                                 str(int(num_spk or 0))], capture_output=True, text=True,
@@ -615,13 +1055,40 @@ class Engine:
                  r.get("run_s", 0), len(r["turns"]))
         return [(int(a), int(b), int(s)) for a, b, s in r["turns"]]
 
+    def _diarize_nemotron(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
+        fd, name = tempfile.mkstemp(suffix=".json", prefix="diar-nemo-")
+        os.close(fd)
+        out = Path(name)
+        try:
+            p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_nemotron.py")), str(wav), str(out),
+                                str(int(num_spk or 0))], capture_output=True, text=True,
+                               timeout=max(900, duration_of(wav) * 2))
+            if p.returncode != 0:
+                raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
+            r = json.loads(out.read_text())
+        finally:
+            out.unlink(missing_ok=True)
+        log.info("nemotron diarization on %s: load %.1fs, run %.1fs, %d turns", r.get("device"), r.get("load_s", 0),
+                 r.get("run_s", 0), len(r["turns"]))
+        return [(int(a), int(b), int(s)) for a, b, s in r["turns"]]
+
     def _diarize(self, x: np.ndarray, segs: list, num_spk: int = 0, wav: Path | None = None) -> list[tuple[int, int, int]]:
         """说话人分离 → [(开始ms, 结束ms, 说话人)]，每个时刻一个人。
         diarizer_mode() 是 "pyannote" 且给了 wav：子进程跑 pyannote（用原始录音，不受 LEVEL_USE 影响），
         再用 CAM++ 声纹合并太像的说话人；出错就退回下面的 CAM++。
         CAM++：语音段切成 1.5s 小块（步长 0.75s）提 CAM++ 声纹 → 聚类。
         以前借用 Paraformer 的整句来定说话人，一句里夹着两个人就整句归给一个人，
-        而且远场录音里 Paraformer 的句子时间会整体偏几秒，说话人跟着错位。"""
+        而且远场录音里 Paraformer 的句子时间会整体偏几秒，说话人跟着错位。
+        nemotron 的时间段可以重叠，后面按说话人集合切开。"""
+        self.last_spk_embs = None
+        if diarizer_mode() == "nemotron" and wav is not None:
+            try:
+                turns = self._diarize_nemotron(wav, num_spk)
+                self.last_info["diarizer"] = "nemotron"
+                return turns
+            except Exception as e:  # noqa: BLE001
+                log.exception("nemotron diarization failed, falling back to CAM++")
+                self.last_info["diarizer_failed"] = f"{type(e).__name__}: {e}"[:200]
         if diarizer_mode() == "pyannote" and wav is not None:
             try:
                 turns = self._diarize_pyannote(wav, num_spk)
@@ -630,6 +1097,11 @@ class Engine:
                     n0 = len({t[2] for t in turns})
                     turns = merge_turn_speakers(turns, [[c[0], c[1]] for c in chunks], X, PYA_MERGE_THR)
                     log.info("pyannote speakers %d -> %d after CAM++ merge", n0, len({t[2] for t in turns}))
+                    try:
+                        import voiceprints
+                        self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="pyannote")
+                    except Exception:  # noqa: BLE001
+                        log.debug("compute_meeting_embs failed", exc_info=True)
                 self.last_info["diarizer"] = "pyannote"
                 return turns
             except Exception as e:  # noqa: BLE001
@@ -643,7 +1115,13 @@ class Engine:
             labels = self.full.cb_model(X, oracle_num=int(num_spk))
         else:
             labels = cluster_speakers(X, self.full.cb_model, min_sec=min_cluster_sec(segs))
-        return [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
+        turns = [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
+        try:
+            import voiceprints
+            self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="campp")
+        except Exception:  # noqa: BLE001
+            log.debug("compute_meeting_embs failed", exc_info=True)
+        return turns
 
     def _spk_embeddings(self, x: np.ndarray, segs: list) -> tuple[list, np.ndarray]:
         """语音段切成 1.5s 小块（步长 0.75s），每块一个 CAM++ 声纹。返回 (小块 [开始秒, 结束秒, 音频], 声纹矩阵)。"""
@@ -697,16 +1175,24 @@ class Engine:
         但 Nano 常把两个人的话识别成一句（“……办几天比较合适呀都是一天吧。”），整句只能归给一个人：
         min_ms > 0 时按逐字时间戳看声纹，句中换了人、而且换过去的人连续说够 min_ms 毫秒，就在那里切开（见 _split_sentence）。"""
         min_ms = SPLIT_MIN_MS if min_ms is None else min_ms
+        turns_sorted = sorted(turns) if turns else []
         out: list[dict] = []
         sent: list[dict] = []
         for i, c in enumerate(clauses):
             sent.append(c)
             nxt = clauses[i + 1] if i + 1 < len(clauses) else None
             if nxt is None or c["text"][-1] in "。？！?!" or nxt["start"] - c["end"] >= 1000:
-                spk = cls._spk_major(turns, sent)
+                s0, e0 = sent[0]["start"], sent[-1]["end"]
+                local = [t for t in turns_sorted if t[1] > s0 and t[0] < e0] if turns_sorted else []
+                use_turns = local or turns_sorted
+                spk = cls._spk_major(use_turns, sent)
                 for x_ in sent:
                     x_["spk"] = spk
-                out += cls._split_sentence(sent, turns, min_ms) if (min_ms > 0 and turns) else sent
+                # 重叠时按「这一刻有哪些人」切开，并允许一段标多个人；没有重叠时仍走原来的拆句
+                if use_turns and diar_overlap.turns_overlap(use_turns, s0, e0):
+                    out += diar_overlap.split_sentence(sent, use_turns, min_ms)
+                else:
+                    out += cls._split_sentence(sent, use_turns, min_ms) if (min_ms > 0 and use_turns) else sent
                 sent = []
         return out
 
@@ -719,15 +1205,29 @@ class Engine:
         for c in sent:
             ct = c.get("ct") or [None] * len(c["text"])
             chars += list(zip(c["text"], ct))
-        tl = sorted(turns)
+        if not chars or not turns:
+            return sent
+        ts_all = [t for _, t in chars if t]
+        s0 = min([sent[0]["start"], *(t[0] for t in ts_all)])
+        e0 = max([sent[-1]["end"], *(t[1] for t in ts_all)])
+        tl = sorted(t for t in turns if t[1] > s0 and t[0] < e0)
+        if not tl:
+            tl = sorted(turns)
         starts = [t[0] for t in tl]
+        has_nested = any(tl[k][1] < tl[k - 1][1] for k in range(1, len(tl)))
 
         def spk_of(ms: float) -> int:
-            k = bisect.bisect_right(starts, ms) - 1
-            if k >= 0 and tl[k][1] > ms:
-                return tl[k][2]
-            cand = [j for j in (k, k + 1) if 0 <= j < len(tl)]
-            return tl[min(cand, key=lambda j: min(abs(tl[j][0] - ms), abs(tl[j][1] - ms)))][2]
+            if not has_nested:
+                k = bisect.bisect_right(starts, ms) - 1
+                if k >= 0 and tl[k][1] > ms:
+                    return tl[k][2]
+                cand = [j for j in (k, k + 1) if 0 <= j < len(tl)]
+                return tl[min(cand, key=lambda j: min(abs(tl[j][0] - ms), abs(tl[j][1] - ms)))][2]
+            # 含嵌套时间段时安全回退：先找覆盖 ms 的段，否则按全量最近端点
+            active = [t for t in tl if t[0] <= ms < t[1]]
+            if active:
+                return max(active, key=lambda t: (t[1] - t[0], -t[0]))[2]
+            return min(tl, key=lambda t: min(abs(t[0] - ms), abs(t[1] - ms)))[2]
 
         labs, prev = [], None
         for _, t in chars:
@@ -853,11 +1353,13 @@ class Engine:
         paras = []
         for s in sents:
             spk = int(s.get("spk", 0))
+            who = tuple(int(x) for x in (s.get("spks") or [spk]))
             text = s.get("text", "").strip()
             if not text:
                 continue
             last = paras[-1] if paras else None
-            if (last and last["spk"] == spk and s["start"] - last["end"] < 3000
+            last_who = tuple(last.get("spks") or [last["spk"]]) if last else None
+            if (last and last_who == who and s["start"] - last["end"] < 3000
                     and s["end"] - last["start"] < 60000 and len(last["text"]) < 300):
                 last["end"] = s["end"]
                 sep = " " if re.match(r"[A-Za-z0-9]", text) and re.search(r"[A-Za-z0-9.,?!]$", last["text"]) else ""
@@ -865,57 +1367,58 @@ class Engine:
                     sep = "，"  # 上一段末尾没标点（多是识别段的结尾），补逗号免得两句粘成一句
                 last["text"] += sep + text
             else:
-                paras.append({"spk": spk, "start": int(s["start"]), "end": int(s["end"]), "text": text})
+                item = {"spk": spk, "start": int(s["start"]), "end": int(s["end"]), "text": text}
+                if len(who) > 1:
+                    item["spks"] = list(who)
+                paras.append(item)
+        for p in paras:
+            p["text"] = repetition.collapse_repetition(p["text"])
         return paras
 
     # ---------- 实时转写 ----------
-    def live_session(self, pcm_path: Path, hotword: str = "") -> "LiveSession":
-        return LiveSession(self, pcm_path, hotword)
+    def live_session(self, pcm_path: Path, hotword: str = "", channels: int = 1) -> "LiveSession":
+        return LiveSession(self, pcm_path, hotword, channels)
 
 
-class LiveSession:
-    """接收 16k/16bit PCM，流式 VAD 切句，句中每秒出一次临时结果，句末出最终结果。
-    音频追加写入 pcm 文件，支持同一会议多次录音续写。"""
+class _LiveChan:
+    """实时转写的一路语音检测与切句（单声道 ch=None，双声道 ch=0/1）。"""
 
-    CHUNK = 3200  # 200ms
-    PARTIAL_EVERY = 1.0
-
-    def __init__(self, engine: Engine, pcm_path: Path, hotword: str):
-        self.e = engine
-        self.hotword = hotword.strip()
-        self.offset = pcm_path.stat().st_size // 2 if pcm_path.exists() else 0  # 续录时的起始样本
-        self.written = 0  # 本次会话写入的字节数
-        self.f = open(pcm_path, "ab")
-        self.vad = engine.new_vad()
+    def __init__(self, session: "LiveSession", ch: int | None = None):
+        self.s = session
+        self.ch = ch
+        self.vad = session.e.new_vad()
         self.cache: dict = {}
-        self.audio = np.zeros(0, dtype=np.float32)  # 本次会话的音频（float32）
-        self.audio_base = 0  # self.audio[0] 对应本次会话的样本号
+        self.audio = np.zeros(0, dtype=np.float32)
+        self.audio_base = 0
         self.pending = np.zeros(0, dtype=np.float32)
-        self.fed = 0  # 已送入 VAD 的样本数（本次会话）
-        self.seg_start = None  # 当前句开始（ms，本次会话）
+        self.fed = 0
+        self.seg_start = None
         self.last_partial = 0.0
-        self.closed = False
+        self.prev_text = ""
 
-    @property
-    def total_ms(self) -> int:
-        return int((self.offset + self.audio_base + len(self.audio)) / SR * 1000)
-
-    @property
-    def file_bytes(self) -> int:
-        """pcm 文件现在（含还在写缓冲里的）一共多少字节：断线重连时告诉网页从哪里接着补发。"""
-        return self.offset * 2 + self.written
-
-    def _asr(self, beg_ms: int, end_ms: int) -> str:
+    def _clip(self, beg_ms: int, end_ms: int) -> np.ndarray:
         a = int(beg_ms * SR / 1000) - self.audio_base
         b = int(end_ms * SR / 1000) - self.audio_base
-        return self.e.asr_segment(self.audio[max(a, 0):max(b, 0)], self.hotword)
+        return self.audio[max(a, 0):max(b, 0)]
+
+    def _asr(self, beg_ms: int, end_ms: int) -> str:
+        return self.s.e.asr_segment(self._clip(beg_ms, end_ms), self.s.hotword, context=self.prev_text)
+
+    def _tag(self, ev: dict) -> dict:
+        if self.ch is not None:
+            ev["spk"] = self.ch
+            ev["ch"] = self.ch
+        return ev
 
     def _final(self, beg: int, end: int) -> list[dict]:
-        text = self._asr(beg, end)
-        out = []
-        if text:
-            off = int(self.offset / SR * 1000)
-            out.append({"type": "final", "start": beg + off, "end": end + off, "text": text})
+        off = int(self.s.offset / SR * 1000)
+        pieces = decode_capped(
+            self._clip(beg, end), beg + off, end + off,
+            lambda clip, hw, ctx: self.s.e.asr_segment(clip, hw, context=ctx),
+            self.s.hotword, self.prev_text)
+        out = [self._tag({"type": "final", **p}) for p in pieces]
+        if out:
+            self.prev_text = safe_context(out[-1]["text"])
         # 丢弃已完成句之前的音频，控制内存
         cut = int(end * SR / 1000) - self.audio_base
         if cut > 0:
@@ -938,27 +1441,23 @@ class LiveSession:
                 self.seg_start = None
         return events
 
-    def feed(self, data: bytes) -> list[dict]:
-        if self.closed or not data:
+    def feed(self, x: np.ndarray) -> list[dict]:
+        if len(x) == 0:
             return []
-        self.f.write(data)
-        self.f.flush()  # 确认给网页的字节必须已经交给系统：服务进程崩了也不丢，网页据此删掉本地缓存
-        self.written += len(data)
-        x = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         self.audio = np.concatenate([self.audio, x])
         self.pending = np.concatenate([self.pending, x])
         events = []
-        while len(self.pending) >= self.CHUNK:
-            chunk, self.pending = self.pending[:self.CHUNK], self.pending[self.CHUNK:]
+        while len(self.pending) >= LiveSession.CHUNK:
+            chunk, self.pending = self.pending[: LiveSession.CHUNK], self.pending[LiveSession.CHUNK:]
             events += self._vad_step(chunk, False)
         now = time.time()
-        if self.seg_start is not None and now - self.last_partial >= self.PARTIAL_EVERY:
+        if self.seg_start is not None and now - self.last_partial >= LiveSession.PARTIAL_EVERY:
             self.last_partial = now
             end = int(self.fed / SR * 1000)
             text = self._asr(self.seg_start, end)
             if text:
-                off = int(self.offset / SR * 1000)
-                events.append({"type": "partial", "start": self.seg_start + off, "end": end + off, "text": text})
+                off = int(self.s.offset / SR * 1000)
+                events.append(self._tag({"type": "partial", "start": self.seg_start + off, "end": end + off, "text": text}))
         if self.seg_start is None and len(self.audio) > SR * 30:  # 长时间静音，丢弃缓存
             drop = len(self.audio) - SR * 5
             self.audio = self.audio[drop:]
@@ -966,18 +1465,89 @@ class LiveSession:
         return events
 
     def finish(self) -> list[dict]:
-        if self.closed:
-            return []
         # 末块补零到整块：太短的输入会让 FunASR 内部计算 RTF 时除以 0
-        tail = np.pad(self.pending, (0, max(0, self.CHUNK - len(self.pending))))
+        tail = np.pad(self.pending, (0, max(0, LiveSession.CHUNK - len(self.pending))))
         try:
             events = self._vad_step(tail, True)
         except Exception:  # noqa: BLE001
-            log.exception("vad final step")
+            log.exception("vad final step%s", f" ch{self.ch}" if self.ch is not None else "")
             events = []
         if self.seg_start is not None:
             events += self._final(self.seg_start, int(self.fed / SR * 1000))
             self.seg_start = None
+        return events
+
+
+class LiveSession:
+    """接收 16k/16bit PCM，流式 VAD 切句，句中每秒出一次临时结果，句末出最终结果。
+    音频追加写入 pcm 文件，支持同一会议多次录音续写。"""
+
+    CHUNK = 3200  # 200ms
+    PARTIAL_EVERY = 1.0
+
+    def __init__(self, engine: Engine, pcm_path: Path, hotword: str, channels: int = 1):
+        self.e = engine
+        self.hotword = hotword.strip()
+        self.channels = dual_audio.channels_of(channels)
+        self.frame_bytes = 2 * self.channels
+        # 先创建 VAD 再打开 pcm 文件：VAD 初始化失败时不泄漏文件句柄
+        self._chans = [_LiveChan(self, i) for i in range(2)] if self.channels == 2 else [_LiveChan(self, None)]
+        # 若已有 pcm 末尾存在非整帧残字节（如异常崩溃），先截齐再追加，避免后续采样整体错位
+        if pcm_path.exists():
+            size = pcm_path.stat().st_size
+            aligned = size - (size % self.frame_bytes)
+            if aligned < size:
+                with open(pcm_path, "r+b") as tf:
+                    tf.truncate(aligned)
+            self.offset = aligned // self.frame_bytes
+        else:
+            self.offset = 0  # 续录时的起始采样（每路）
+        self.written = 0  # 本次会话写入的字节数（仅计整帧）
+        self._byte_rem = b""  # 未凑满一帧的尾部残字节，留到下次 feed 拼齐再写盘
+        self.f = open(pcm_path, "ab")
+        self.closed = False
+
+    @property
+    def total_ms(self) -> int:
+        ch = self._chans[0]
+        return int((self.offset + ch.audio_base + len(ch.audio)) / SR * 1000)
+
+    @property
+    def file_bytes(self) -> int:
+        """pcm 文件现在（含还在写缓冲里的）一共多少字节：断线重连时告诉网页从哪里接着补发。"""
+        return self.offset * self.frame_bytes + self.written
+
+    def feed(self, data: bytes) -> list[dict]:
+        if self.closed or not data:
+            return []
+        buf = self._byte_rem + data if self._byte_rem else data
+        usable = len(buf) - (len(buf) % self.frame_bytes)
+        self._byte_rem = buf[usable:]
+        if usable == 0:
+            return []
+        chunk = buf[:usable]
+        self.f.write(chunk)
+        self.f.flush()  # 确认给网页的字节必须已经交给系统：服务进程崩了也不丢，网页据此删掉本地缓存
+        self.written += usable
+        if self.channels == 2:
+            return self._feed_stereo(chunk)
+        return self._chans[0].feed(np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0)
+
+    def _feed_stereo(self, data: bytes) -> list[dict]:
+        mic, remote = dual_audio.split_interleaved(data)
+        events = []
+        if mic:
+            events += self._chans[0].feed(np.frombuffer(mic, dtype="<i2").astype(np.float32) / 32768.0)
+        if remote:
+            events += self._chans[1].feed(np.frombuffer(remote, dtype="<i2").astype(np.float32) / 32768.0)
+        return events
+
+    def finish(self) -> list[dict]:
+        if self.closed:
+            return []
+        events = []
+        for ch in self._chans:
+            events += ch.finish()
         self.close()
         return events
 

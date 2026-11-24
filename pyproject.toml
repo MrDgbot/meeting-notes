@@ -16,6 +16,10 @@ dependencies = [
     "python-multipart",
     "httpx",
     "pypinyin",
+    "jieba",
+    "scikit-learn",
+    "umap-learn",
+    "transformers",
     "segno>=1.6.6",
     "cryptography>=42",
     "pyannote-audio>=4.0.7",
@@ -23,3 +27,12 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+norecursedirs = ["eval", "mobile", "audio", "__pycache__"]
+markers = [
+    "integration: requires downloaded ASR/diarization models or a live server subprocess",
+]
+addopts = ["-m", "not integration"]

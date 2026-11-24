@@ -2,7 +2,7 @@
 
 在 app 的环境里跑（要 import asr_engine）：
   .venv/bin/python tests/eval/run_pipeline.py --engine nano --out ~/eval-out/ali-test-nano ~/eval-data/ali-test/wav/*.wav
-  --engine：hanbao（憨包识别 + 本机说话人）、nano（Fun-ASR-Nano）、paraformer
+  --engine：doubao（豆包识别 + 本机说话人）、nano（Fun-ASR-Nano）、paraformer
 输出每个文件一个 JSON：paras（网页上看到的段落）、turns（声纹聚类得到的说话人时间段，用来算 DER）、耗时。
 设置写在临时数据目录里，不碰真实数据。已有结果的文件跳过，可以中断后接着跑。
 """
@@ -16,7 +16,7 @@ from pathlib import Path
 
 ap = argparse.ArgumentParser()
 ap.add_argument("wavs", nargs="+")
-ap.add_argument("--engine", choices=["hanbao", "nano", "paraformer"], required=True)
+ap.add_argument("--engine", choices=["doubao", "nano", "paraformer"], required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--num-spk", type=int, default=0, help="0 = 自动判断（产品默认）")
 ap.add_argument("--vad-thres", type=float, default=None, help="全天模式的收音灵敏度（speech_noise_thres）；不给 = 手动录音的默认")
@@ -83,7 +83,7 @@ _orig_paras = eng._paragraphs
 
 
 def _paragraphs(sents):
-    captured["sents"] = [dict(x) for x in sents]  # 合并成段落之前的句子（Nano 是小句，憨包是识别单元）：按时间截取片段时用
+    captured["sents"] = [dict(x) for x in sents]  # 合并成段落之前的句子（Nano 是小句，豆包是识别单元）：按时间截取片段时用
     return _orig_paras(sents)
 
 

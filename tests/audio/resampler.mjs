@@ -60,5 +60,37 @@ for (const rate of [48000, 44100, 24000, 16000]) {
     }
   }
 }
+console.log("\n--- 额外回归：多声道平均 & 变长音频块 & 缓冲复用 ---");
+{
+  const { p, posted } = makeProc(48000);
+  const ext0 = p.ext, x0 = p.x;
+  const total = 48000 * 2;
+  for (let i = 0; i < total; i += 128) {
+    const n = Math.min(128, total - i), c0 = new Float32Array(n), c1 = new Float32Array(n);
+    for (let k = 0; k < n; k++) { const s = 0.6 * Math.sin(2 * Math.PI * 1000 * (i + k) / 48000); c0[k] = s; c1[k] = s * 0.5; }
+    p.process([[c0, c1]]);
+  }
+  const out = []; for (const m of posted) out.push(...new Int16Array(m.pcm));
+  for (let i = 0; i < p.n; i++) out.push(p.out[i]);
+  const a = amp(Float64Array.from(out, v => v / 32768), 1000);
+  check(p.ext === ext0 && p.x === x0, "128 样本块全程复用预分配缓冲（零重建）");
+  check(Math.abs(db(a / 0.45)) <= 0.5, `双声道平均增益 ${db(a / 0.45).toFixed(2)} dB（应接近 0dB）`);
+}
+{
+  const { p, posted } = makeProc(44100);
+  const sizes = [64, 256, 33, 128, 300];
+  let idx = 0, si = 0, total = 44100 * 2;
+  while (idx < total) {
+    const n = Math.min(sizes[si++ % sizes.length], total - idx), ch = new Float32Array(n);
+    for (let k = 0; k < n; k++) ch[k] = 0.5 * Math.sin(2 * Math.PI * 1000 * (idx + k) / 44100);
+    p.process([[ch]]);
+    idx += n;
+  }
+  const out = []; for (const m of posted) out.push(...new Int16Array(m.pcm));
+  for (let i = 0; i < p.n; i++) out.push(p.out[i]);
+  const a = amp(Float64Array.from(out, v => v / 32768), 1000);
+  check(Math.abs(out.length - 32000) <= 1, `变长块 2 秒 → ${out.length} 个样本（应为 32000）`);
+  check(Math.abs(db(a / 0.5)) <= 0.5, `变长块 1kHz 通带增益 ${db(a / 0.5).toFixed(2)} dB`);
+}
 console.log(fail ? `\n${fail} 项失败` : "\n全部通过");
 process.exit(fail ? 1 : 0);

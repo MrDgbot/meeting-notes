@@ -16,12 +16,16 @@ import asr_engine  # noqa: E402
 import lan  # noqa: E402
 
 fails = 0
+_STANDALONE = False
 
 
 def check(ok, msg):
     global fails
     print(f"{'ok  ' if ok else 'FAIL'}  {msg}")
-    fails += not ok
+    if not ok:
+        fails += 1
+        if not _STANDALONE:
+            raise AssertionError(str(msg))
 
 
 AVF = """[AVFoundation indev @ 0x7f8] AVFoundation video devices:
@@ -55,43 +59,61 @@ ALSA = """Auto-detected sources for alsa:
 * hw:CARD=PCH,DEV=0 [HDA Intel PCH, ALC3246 Analog] (none)
 """
 
-check(ambient.parse_avfoundation(AVF) == ["MacBook Pro麦克风", "iPhone麦克风"], "avfoundation：只列音频设备")
-check(ambient.parse_dshow(DSHOW_NEW) == ["麦克风阵列 (Realtek(R) Audio)", "立体声混音 (Realtek(R) Audio)"],
-      f"DirectShow 新版输出：{ambient.parse_dshow(DSHOW_NEW)}")
-check(ambient.parse_dshow(DSHOW_OLD) == ["Microphone (Realtek High Definition Audio)"], "DirectShow 旧版输出（分节）")
-check(ambient.parse_sources(PULSE) == ["mn.monitor", "alsa_input.pci-0000_00_1f.3.analog-stereo"], "PulseAudio 设备列表")
-check(ambient.parse_sources(PULSE_DOWN) is None, "PulseAudio 连不上 → None（改用 ALSA）")
-check(ambient.parse_sources(ALSA) == ["null", "hw:CARD=PCH,DEV=0"], "ALSA 设备列表")
 
-with mock.patch.object(sys, "platform", "darwin"):
-    check(ambient.input_args("") == ["-f", "avfoundation", "-i", ":default"], "macOS 默认输入 :default")
-    check(ambient.input_args("iPhone麦克风") == ["-f", "avfoundation", "-i", ":iPhone麦克风"], "macOS 指定设备")
-with mock.patch.object(sys, "platform", "win32"), mock.patch.object(ambient, "list_devices", lambda: ["麦克风 (USB)", "立体声混音"]):
-    check(ambient.input_args("")[-1] == "audio=麦克风 (USB)", "Windows 没选设备 → 列表里第一个")
-    check(ambient.input_args("立体声混音")[-1] == "audio=立体声混音", "Windows 指定设备")
-with mock.patch.object(sys, "platform", "win32"), mock.patch.object(ambient, "list_devices", lambda: []):
+def test_parse_devices():
+    check(ambient.parse_avfoundation(AVF) == ["MacBook Pro麦克风", "iPhone麦克风"], "avfoundation：只列音频设备")
+    check(ambient.parse_dshow(DSHOW_NEW) == ["麦克风阵列 (Realtek(R) Audio)", "立体声混音 (Realtek(R) Audio)"],
+          f"DirectShow 新版输出：{ambient.parse_dshow(DSHOW_NEW)}")
+    check(ambient.parse_dshow(DSHOW_OLD) == ["Microphone (Realtek High Definition Audio)"], "DirectShow 旧版输出（分节）")
+    check(ambient.parse_sources(PULSE) == ["mn.monitor", "alsa_input.pci-0000_00_1f.3.analog-stereo"], "PulseAudio 设备列表")
+    check(ambient.parse_sources(PULSE_DOWN) is None, "PulseAudio 连不上 → None（改用 ALSA）")
+    check(ambient.parse_sources(ALSA) == ["null", "hw:CARD=PCH,DEV=0"], "ALSA 设备列表")
+
+
+def test_input_args():
+    with mock.patch.object(sys, "platform", "darwin"):
+        check(ambient.input_args("") == ["-f", "avfoundation", "-i", ":default"], "macOS 默认输入 :default")
+        check(ambient.input_args("iPhone麦克风") == ["-f", "avfoundation", "-i", ":iPhone麦克风"], "macOS 指定设备")
+    with mock.patch.object(sys, "platform", "win32"), mock.patch.object(ambient, "list_devices", lambda: ["麦克风 (USB)", "立体声混音"]):
+        check(ambient.input_args("")[-1] == "audio=麦克风 (USB)", "Windows 没选设备 → 列表里第一个")
+        check(ambient.input_args("立体声混音")[-1] == "audio=立体声混音", "Windows 指定设备")
+    with mock.patch.object(sys, "platform", "win32"), mock.patch.object(ambient, "list_devices", lambda: []):
+        try:
+            ambient.input_args("")
+            check(False, "Windows 没有麦克风应报错")
+        except RuntimeError as e:
+            check("没有找到麦克风" in str(e), f"Windows 没有麦克风 → {e}")
+    with mock.patch.object(sys, "platform", "linux"):
+        with mock.patch.object(ambient, "_linux_backend", lambda: ("pulse", ["mn.monitor"])):
+            check(ambient.input_args("") == ["-f", "pulse", "-i", "default"], "Linux PulseAudio 默认输入")
+            check(ambient.input_args("mn.monitor") == ["-f", "pulse", "-i", "mn.monitor"], "Linux PulseAudio 指定设备")
+        with mock.patch.object(ambient, "_linux_backend", lambda: ("alsa", [])):
+            check(ambient.input_args("") == ["-f", "alsa", "-i", "default"], "Linux 没有 PulseAudio → ALSA")
+
+
+def test_runtime_environment():
+    # 真实环境：不报错就行（CI 上没有麦克风，列表多半是空的）
+    devs = ambient.list_devices()
+    check(isinstance(devs, list), f"本机 list_devices()：{devs}")
+    addrs = lan.addresses()
+    check(isinstance(addrs, list) and (addrs or not os.environ.get("CI")),
+          f"本机地址：{[(a['iface'], a['ip'], a['kind']) for a in addrs]}")
+    h = ambient.keep_awake()
     try:
-        ambient.input_args("")
-        check(False, "Windows 没有麦克风应报错")
-    except RuntimeError as e:
-        check("没有找到麦克风" in str(e), f"Windows 没有麦克风 → {e}")
-with mock.patch.object(sys, "platform", "linux"):
-    with mock.patch.object(ambient, "_linux_backend", lambda: ("pulse", ["mn.monitor"])):
-        check(ambient.input_args("") == ["-f", "pulse", "-i", "default"], "Linux PulseAudio 默认输入")
-        check(ambient.input_args("mn.monitor") == ["-f", "pulse", "-i", "mn.monitor"], "Linux PulseAudio 指定设备")
-    with mock.patch.object(ambient, "_linux_backend", lambda: ("alsa", [])):
-        check(ambient.input_args("") == ["-f", "alsa", "-i", "default"], "Linux 没有 PulseAudio → ALSA")
+        check(h is None or hasattr(h, "terminate"), f"阻止休眠：{type(h).__name__}")
+    finally:
+        if h:
+            h.terminate()
+            if hasattr(h, "wait"):
+                h.wait(timeout=5)
+    check(asr_engine.DEVICE in ("cuda", "mps", "cpu"), f"推理设备：{asr_engine.DEVICE}")
 
-# 真实环境：不报错就行（CI 上没有麦克风，列表多半是空的）
-devs = ambient.list_devices()
-check(isinstance(devs, list), f"本机 list_devices()：{devs}")
-addrs = lan.addresses()
-check(isinstance(addrs, list) and (addrs or not os.environ.get("CI")), f"本机地址：{[(a['iface'], a['ip'], a['kind']) for a in addrs]}")
-h = ambient.keep_awake()
-check(h is None or hasattr(h, "terminate"), f"阻止休眠：{type(h).__name__}")
-if h:
-    h.terminate()
-check(asr_engine.DEVICE in ("cuda", "mps", "cpu"), f"推理设备：{asr_engine.DEVICE}")
 
-print("全部通过" if not fails else f"{fails} 项失败")
-sys.exit(1 if fails else 0)
+if __name__ == "__main__":
+    _STANDALONE = True
+    fails = 0
+    test_parse_devices()
+    test_input_args()
+    test_runtime_environment()
+    print("全部通过" if not fails else f"{fails} 项失败")
+    sys.exit(1 if fails else 0)

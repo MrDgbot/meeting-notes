@@ -1,7 +1,7 @@
 """用产品自己的纪要流程（POST /api/meetings/<id>/minutes）给一场会生成纪要，结果存到评测目录，不碰真实数据。
 
-  .venv/bin/python tests/eval/gen_minutes.py ~/eval-data/<会议目录> --provider local --label 本地 --out ~/eval-out/minutes
-  .venv/bin/python tests/eval/gen_minutes.py ~/eval-data/<会议目录> --provider dashscope --label 百炼 --out ~/eval-out/minutes
+  .venv/bin/python tests/eval/gen_minutes.py ~/eval-data/weekly-1023 --provider local --label 本地 --out ~/eval-out/minutes
+  .venv/bin/python tests/eval/gen_minutes.py ~/eval-data/weekly-1023 --provider dashscope --label 百炼 --out ~/eval-out/minutes
   （云端 Key 用环境变量 DASHSCOPE_API_KEY / DEEPSEEK_API_KEY 传，不写进文件）
 
 做法：临时数据目录里放这场会（转写稿、meta）和设置的副本，另起一个产品实例（端口自选），调纪要接口，读完流式结果后关掉。

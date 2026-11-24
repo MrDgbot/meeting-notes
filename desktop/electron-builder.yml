@@ -1,0 +1,40 @@
+appId: com.meetingnotes.desktop
+productName: Meeting Notes
+protocols:
+  - name: Meeting Notes
+    schemes:
+      - meetingnotes
+directories:
+  buildResources: build
+extraResources:
+  - from: build/trayTemplate.png
+    to: trayTemplate.png
+  - from: build/trayTemplate@2x.png
+    to: trayTemplate@2x.png
+  - from: build/icon.icns
+    to: icon.icns
+files:
+  - out/**
+  - "!**/.vscode/*"
+  - "!src/*"
+  - "!electron.vite.config.{js,ts,mjs,cjs}"
+  - "!biome.json"
+  - "!vitest.config.ts"
+  - "!tsconfig*.json"
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  identity: null
+  notarize: false
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dir
+      arch:
+        - arm64
+  extendInfo:
+    NSMicrophoneUsageDescription: 会议记录需要访问麦克风，用于实时会议录音、全天对话记录和语音转写。
+    NSScreenCaptureUsageDescription: 会议记录需要捕获电脑系统音频，用于双声道录制线上会议中对方的声音。
+npmRebuild: false
