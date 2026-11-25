@@ -10,6 +10,7 @@ import type {
   SidecarLogEntry,
   SidecarStatus,
   ThemeMode,
+  UpdateStatus,
 } from "@shared/types";
 import { create } from "zustand";
 import { api, wsUrl } from "@/lib/api";
@@ -42,9 +43,11 @@ export interface SearchState {
 
 export type SideKindFilter = "all" | "meeting" | "ambient" | "upload";
 
-export type SettingsTab = "llm" | "asr" | "vocab" | "ambient" | "rsi" | "lan" | "mcp";
+export type SettingsTab = "llm" | "asr" | "vocab" | "ambient" | "rsi" | "lan" | "mcp" | "about";
 
-export function normalizeSettingsTab(tab: SettingsTab): "llm" | "asr" | "vocab" | "ambient" | "lan" {
+export function normalizeSettingsTab(
+  tab: SettingsTab,
+): "llm" | "asr" | "vocab" | "ambient" | "lan" | "about" {
   if (tab === "rsi") return "vocab";
   if (tab === "mcp") return "lan";
   return tab;
@@ -90,6 +93,7 @@ interface AppStoreState {
   sidecarStatus: SidecarStatus | null;
   sidecarLogs: SidecarLogEntry[];
   desktopInfo: DesktopRuntimeInfo | null;
+  updateStatus: UpdateStatus | null;
 
   pushToast: (msg: string, msOrOpts?: number | ToastOptions) => number;
   dismissToast: (id: number) => void;
@@ -223,6 +227,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   sidecarStatus: null,
   sidecarLogs: [],
   desktopInfo: null,
+  updateStatus: null,
 
   pushToast: (msg, msOrOpts = 2800) => {
     const id = ++toastSeq;
@@ -500,6 +505,16 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         .getSidecarLogs()
         .then((sidecarLogs) => set({ sidecarLogs }))
         .catch(() => {});
+      void desk
+        .getUpdateStatus()
+        .then((updateStatus) => set({ updateStatus }))
+        .catch(() => {});
+
+      unsubs.push(
+        desk.onUpdateStatus((updateStatus) => {
+          set({ updateStatus });
+        }),
+      );
 
       unsubs.push(
         desk.onSidecarStatus((sidecarStatus) => {

@@ -33,6 +33,7 @@ files:
   - "!.cache/*"
 mac:
   icon: build/icon.icns
+  artifactName: "Meeting-Notes-${version}-${arch}-mac.${ext}"
   category: public.app-category.productivity
   identity: null
   notarize: false
@@ -54,8 +55,10 @@ mac:
     NSScreenCaptureUsageDescription: 会议记录需要捕获电脑系统音频，用于双声道录制线上会议中对方的声音。
 dmg:
   title: "Meeting Notes ${version}"
+  artifactName: "Meeting-Notes-${version}-${arch}.${ext}"
 win:
   icon: build/icon.ico
+  artifactName: "Meeting-Notes-${version}-win-${arch}-portable.${ext}"
   verifyUpdateCodeSignature: false
   target:
     - target: nsis
@@ -65,7 +68,7 @@ win:
       arch:
         - x64
 nsis:
-  artifactName: "Meeting-Notes-${version}-win-${arch}-setup.${ext}"
+  artifactName: "Meeting-Notes-Setup-${version}.${ext}"
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -86,9 +89,17 @@ linux:
     - target: deb
       arch:
         - x64
+appImage:
+  artifactName: "Meeting-Notes-${version}-${arch}.${ext}"
 deb:
+  artifactName: "meeting-notes_${version}_${arch}.${ext}"
   depends: []
   recommends:
     - ffmpeg
 npmRebuild: false
 buildDependenciesFromSource: false
+publish:
+  provider: github
+  owner: MrDgbot
+  repo: meeting-notes
+  releaseType: draft

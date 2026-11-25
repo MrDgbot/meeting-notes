@@ -9,6 +9,7 @@ import { QuickAskController } from "./quickAsk";
 import { ShortcutController } from "./shortcuts";
 import { SidecarManager } from "./sidecar";
 import { type RecorderSyncState, TrayController } from "./tray";
+import { AppUpdaterService } from "./updater";
 import { createMainWindow, getThemeBackgroundColor, readDesktopConfig, writeDesktopConfig } from "./window";
 
 let mainWindow: BrowserWindow | null = null;
@@ -56,6 +57,21 @@ if (!gotLock) {
   let shortcuts: ShortcutController;
   let trayRef: TrayController | null = null;
 
+  const updater = new AppUpdaterService({
+    autoCheck: savedCfg.autoCheckUpdates ?? true,
+    onStatusChanged: (st) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.UPDATER_STATUS_CHANGED, st);
+      }
+    },
+    onBeforeInstall: async () => {
+      isQuitting = true;
+      await sidecar.stop();
+      await bridge.stop();
+    },
+    onNotifyTray: () => trayRef?.updateUI(),
+  });
+
   const meetingDetector = new MeetingDetector({
     getRecorderState: () => recorderState,
     onDetected: (detected) => {
@@ -99,6 +115,14 @@ if (!gotLock) {
     onOpenDiagnostics: () => {
       showMain();
       mainWindow?.webContents.send(IPC.WINDOW_OPEN_DIAGNOSTICS);
+    },
+    getUpdateStatus: () => updater.getStatus(),
+    onCheckUpdates: () => {
+      showMain();
+      void updater.checkForUpdates();
+    },
+    onInstallUpdate: () => {
+      void updater.installUpdate();
     },
     onQuit: () => {
       app.quit();
@@ -166,6 +190,7 @@ if (!gotLock) {
     registerIpcHandlers({
       sidecar,
       tray,
+      updater,
       setRecorderState: (next) => {
         recorderState = next;
         if (next.active) {
@@ -205,11 +230,13 @@ if (!gotLock) {
       win.webContents.on("did-finish-load", () => {
         win.webContents.send(IPC.SIDECAR_STATUS_CHANGED, sidecar.getStatus());
         win.webContents.send(IPC.MEETING_APP_DETECTED, meetingDetector.getCurrent());
+        win.webContents.send(IPC.UPDATER_STATUS_CHANGED, updater.getStatus());
       });
       return win;
     };
 
     mainWindow = createAndWireMain();
+    updater.init(mainWindow);
 
     tray.start();
     shortcuts.register();
@@ -225,6 +252,7 @@ if (!gotLock) {
   });
 
   app.on("will-quit", () => {
+    updater.dispose();
     shortcuts.unregisterAll();
     meetingDetector.stop();
     quickAsk?.destroy();

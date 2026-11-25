@@ -10,13 +10,27 @@ import type {
   RsiState,
   VocabData,
 } from "@shared/types";
-import { BookOpen, Bot, ChevronDown, Mic, Plus, Radio, RefreshCw, Smartphone, Trash2, X } from "lucide-react";
+import {
+  BookOpen,
+  Bot,
+  ChevronDown,
+  Download,
+  ExternalLink,
+  Info,
+  Mic,
+  Plus,
+  Radio,
+  RefreshCw,
+  Smartphone,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CopyButton, Disclosure, InlineConfirm, ModalShell } from "@/components/MotionPrimitives";
 import { api } from "@/lib/api";
 import { normalizeSettingsTab, type SettingsTab, useAppStore } from "@/stores/appStore";
 
-type CanonicalSettingsTab = "llm" | "asr" | "vocab" | "ambient" | "lan";
+type CanonicalSettingsTab = "llm" | "asr" | "vocab" | "ambient" | "lan" | "about";
 
 const NAV_TABS: Array<{ id: CanonicalSettingsTab; label: string; icon: typeof Bot }> = [
   { id: "llm", label: "AI 模型", icon: Bot },
@@ -24,6 +38,7 @@ const NAV_TABS: Array<{ id: CanonicalSettingsTab; label: string; icon: typeof Bo
   { id: "vocab", label: "词库与声纹", icon: BookOpen },
   { id: "ambient", label: "全天模式", icon: Radio },
   { id: "lan", label: "多端与集成", icon: Smartphone },
+  { id: "about", label: "关于与更新", icon: Info },
 ];
 
 const LLM_PRESETS: Array<{ name: string; base_url: string; model: string }> = [
@@ -66,6 +81,9 @@ export function SettingsModal() {
   const settingsTab = useAppStore((s) => s.settingsTab);
   const refreshSettings = useAppStore((s) => s.refreshSettings);
   const refreshHealth = useAppStore((s) => s.refreshHealth);
+  const desktopInfo = useAppStore((s) => s.desktopInfo);
+  const sidecarStatus = useAppStore((s) => s.sidecarStatus);
+  const updateStatus = useAppStore((s) => s.updateStatus);
   const pushToast = useAppStore((s) => s.pushToast);
 
   const [tab, setTab] = useState<CanonicalSettingsTab>(() => normalizeSettingsTab(settingsTab));
@@ -1404,6 +1422,159 @@ export function SettingsModal() {
                   </Disclosure>
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === "about" && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-[var(--line)] p-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[15px] font-semibold text-[var(--text)]">
+                    会议记录（Meeting Notes）
+                  </div>
+                  <div className="text-xs text-[var(--muted)] mt-1 num">
+                    版本 v{updateStatus?.currentVersion || desktopInfo?.version || "0.1.0"} ·{" "}
+                    {desktopInfo
+                      ? `${desktopInfo.platform}/${desktopInfo.arch}`
+                      : typeof navigator !== "undefined"
+                        ? navigator.platform
+                        : "Web"}{" "}
+                    · {sidecarStatus?.mode === "standalone" ? "独立安装包" : "开发工作区模式"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.desktopAPI?.openReleasePage) {
+                      void window.desktopAPI.openReleasePage(
+                        "https://github.com/MrDgbot/meeting-notes/releases",
+                      );
+                    } else {
+                      window.open("https://github.com/MrDgbot/meeting-notes/releases", "_blank");
+                    }
+                  }}
+                  className="btn-secondary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>查看全部版本与日志</span>
+                </button>
+              </div>
+
+              {window.desktopAPI && (
+                <div className="rounded-xl border border-[var(--line)] p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[13.5px] font-medium">软件更新</div>
+                      <div className="text-xs text-[var(--muted)] mt-0.5">
+                        {updateStatus?.status === "downloaded"
+                          ? `新版本 v${updateStatus.info?.version ?? ""} 已下载完成，重启即可安装`
+                          : updateStatus?.status === "available"
+                            ? `发现新版本 v${updateStatus.info?.version ?? ""}`
+                            : updateStatus?.status === "downloading"
+                              ? `正在下载更新… ${updateStatus.progress?.percent ?? 0}%`
+                              : updateStatus?.status === "checking"
+                                ? "正在检查是否有新版本…"
+                                : updateStatus?.status === "not-available"
+                                  ? "当前已是最新版本"
+                                  : updateStatus?.status === "error"
+                                    ? "检查更新时网络异常"
+                                    : "保持桌面客户端与本地转写链路处于最新版本"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={
+                          updateStatus?.status === "checking" || updateStatus?.status === "downloading"
+                        }
+                        onClick={() => void window.desktopAPI?.checkForUpdates()}
+                        className="btn-secondary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      >
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${updateStatus?.status === "checking" ? "animate-spin" : ""}`}
+                          aria-hidden="true"
+                        />
+                        <span>{updateStatus?.status === "checking" ? "检查中…" : "检查更新"}</span>
+                      </button>
+
+                      {updateStatus?.status === "available" && (
+                        <button
+                          type="button"
+                          onClick={() => void window.desktopAPI?.downloadUpdate()}
+                          className="btn-primary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>{updateStatus.canAutoInstall ? "立即下载更新" : "前往下载新版"}</span>
+                        </button>
+                      )}
+
+                      {updateStatus?.status === "downloaded" && (
+                        <button
+                          type="button"
+                          onClick={() => void window.desktopAPI?.installUpdate()}
+                          className="btn-primary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span>重启并安装更新</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {updateStatus?.status === "downloading" && updateStatus.progress && (
+                    <div className="space-y-1">
+                      <div className="w-full h-2 rounded-full bg-[var(--fill)] overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-[var(--ink)] transition-[width] duration-200"
+                          style={{ width: `${updateStatus.progress.percent}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-[var(--muted)] num">
+                        <span>{updateStatus.progress.percent}%</span>
+                        <span>
+                          {Math.max(0, Math.round(updateStatus.progress.bytesPerSecond / 1024))} KB/s
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {updateStatus?.status === "error" && updateStatus.error && (
+                    <div className="rounded-lg bg-[var(--red-weak)] text-[var(--red)] px-3 py-2 text-xs break-words">
+                      {updateStatus.error}
+                    </div>
+                  )}
+
+                  {updateStatus?.info?.releaseNotes && (
+                    <div className="rounded-xl bg-[var(--surface-muted)] border border-[var(--line-2)] p-3 max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap text-[var(--text-body)]">
+                      {updateStatus.info.releaseNotes}
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2 border-t border-[var(--line-2)] text-xs">
+                    <div>
+                      <div className="font-medium">启动时自动检查更新</div>
+                      <div className="text-[var(--muted)] text-[11.5px]">
+                        有新版本时在侧栏与托盘轻提示，不会在录音或转写过程中强行重启
+                      </div>
+                    </div>
+                    <label className="ios-switch" aria-label="启动时自动检查更新">
+                      <input
+                        type="checkbox"
+                        checked={updateStatus?.autoCheck ?? true}
+                        onChange={(e) => {
+                          void window.desktopAPI?.setAutoCheckUpdates(e.target.checked);
+                        }}
+                      />
+                      <i />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-xl bg-[var(--surface-muted)] p-3.5 text-xs text-[var(--muted)] space-y-1 leading-relaxed">
+                <div>· 录音、VAD、FunASR / pyannote 声纹与实时转写均在本机完成，音频默认不上传云端。</div>
+                <div>· 开源协议：GNU AGPL-3.0-or-later · GitHub: MrDgbot/meeting-notes</div>
+              </div>
             </div>
           )}
         </div>

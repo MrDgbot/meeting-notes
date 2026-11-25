@@ -45,15 +45,23 @@ jobs:
       matrix:
         target:
           - id: mac-arm64
+            arch: arm64
+            is_mac: true
             os: macos-15
             script: build:mac:arm64
           - id: mac-x64
+            arch: x64
+            is_mac: true
             os: macos-15
             script: build:mac:x64
           - id: win-x64
+            arch: x64
+            is_mac: false
             os: windows-latest
             script: build:win:x64
           - id: linux-x64
+            arch: x64
+            is_mac: false
             os: ubuntu-latest
             script: build:linux:x64
     runs-on: ${{ matrix.target.os }}
@@ -73,6 +81,18 @@ jobs:
         with:
           path: desktop/.cache/vendor-dl
           key: vendor-dl-${{ matrix.target.id }}-0.13.9-b6.1.1
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ matrix.target.id }}-${{ hashFiles('desktop/pnpm-lock.yaml') }}
+          restore-keys: electron-${{ matrix.target.id }}-
       - name: Install desktop dependencies
         run: pnpm --dir desktop install --frozen-lockfile
       - name: Sync package version from tag
@@ -91,20 +111,47 @@ jobs:
               fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
             ' "$VER"
           fi
+      - name: Import Apple certificate (optional)
+        if: matrix.target.is_mac
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No Apple certificate secret configured; building unsigned package."
+            exit 0
+          fi
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          rm -f "$RUNNER_TEMP/certificate.p12"
       - name: Build installer (${{ matrix.target.id }})
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm --dir desktop run ${{ matrix.target.script }}
       - name: Collect release assets
         shell: bash
         run: |
-          rm -rf release-assets
-          mkdir -p release-assets
+          rm -rf release-assets mac-update-yml
+          mkdir -p release-assets mac-update-yml
           shopt -s nullglob
-          for f in desktop/dist/*.dmg desktop/dist/*.zip desktop/dist/*.exe desktop/dist/*.AppImage desktop/dist/*.deb; do
+          for f in desktop/dist/*.dmg desktop/dist/*.zip desktop/dist/*.exe desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.blockmap desktop/dist/latest.yml desktop/dist/latest-linux.yml; do
             cp -v "$f" release-assets/
           done
+          if [ -f desktop/dist/latest-mac.yml ]; then
+            cp -v desktop/dist/latest-mac.yml mac-update-yml/
+          fi
           ls -lh release-assets
           test -n "$(ls -A release-assets)"
       - uses: actions/upload-artifact@v4
@@ -112,6 +159,13 @@ jobs:
           name: release-assets-${{ matrix.target.id }}
           path: release-assets/*
           if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: matrix.target.is_mac
+        with:
+          name: latest-mac-${{ matrix.target.arch }}
+          path: mac-update-yml/latest-mac.yml
+          if-no-files-found: warn
           retention-days: 7
 
   publish:
@@ -121,57 +175,77 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
           path: dist-release
           pattern: release-assets-*
           merge-multiple: true
-      - name: Generate SHA256SUMS and Release notes
+      - uses: actions/download-artifact@v4
+        with:
+          path: mac-yml-artifacts
+          pattern: latest-mac-*
+      - name: Merge macOS update manifests and compute SHA256SUMS
+        shell: bash
+        run: |
+          ARM64_YML="mac-yml-artifacts/latest-mac-arm64/latest-mac.yml"
+          X64_YML="mac-yml-artifacts/latest-mac-x64/latest-mac.yml"
+          if [ -f "$ARM64_YML" ] || [ -f "$X64_YML" ]; then
+            node desktop/scripts/merge-mac-update-yml.mjs \
+              ${ARM64_YML:+--arm64 "$ARM64_YML"} \
+              ${X64_YML:+--x64 "$X64_YML"} \
+              --out dist-release/latest-mac.yml
+          fi
+          (
+            cd dist-release
+            shopt -s nullglob
+            BINARIES=(*.dmg *.zip *.exe *.AppImage *.deb)
+            if [ ${#BINARIES[@]} -gt 0 ]; then
+              sha256sum "${BINARIES[@]}" > SHA256SUMS.txt
+            fi
+          )
+          ls -lh dist-release
+      - name: Generate Release notes
         shell: bash
         env:
           TAG_INPUT: ${{ inputs.tag }}
         run: |
           TAG="${TAG_INPUT:-$GITHUB_REF_NAME}"
-          (cd dist-release && sha256sum * > SHA256SUMS.txt)
-          ls -lh dist-release
-          cat > release-notes.md <<'EOF'
-          ## 会议记录桌面端（开箱即用版）
-
-          所有安装包均已内置 Python 后端源码、`uv` 与 `ffmpeg`：
-          - 下载安装并打开桌面应用后，首次启动会自动完成 Python 3.11 与依赖环境初始化（默认支持国内清华 PyPI 加速源，可在界面中一键切换官方源）。
-          - 首次使用本地语音识别时，会自动下载语音模型到本地目录，音频与转写文件全程留在自己的电脑上。
-
-          ### 平台安装说明
-
-          | 平台 | 推荐安装包 | 便携包 / 备注 |
-          |---|---|---|
-          | **macOS (Apple Silicon M 系列)** | `*-mac-arm64.dmg` | `*-mac-arm64.zip` |
-          | **macOS (Intel)** | `*-mac-x64.dmg` | `*-mac-x64.zip` |
-          | **Windows (64-bit)** | `*-win-x64-setup.exe` | `*-win-x64.zip` |
-          | **Linux (x86_64)** | `*.AppImage` | `*-linux-amd64.deb`（或 `*-x64.deb`） |
-
-          ### 首次打开提示（未签名安装包）
-
-          - **macOS**：当前安装包尚未做 Apple 公证签名。首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端运行一次即可放行：
-            ```bash
-            xattr -cr "/Applications/Meeting Notes.app"
-            ```
-            或在「系统设置 → 隐私与安全性」底部点击「仍要打开」。
-          - **Windows**：若 Microsoft Defender SmartScreen 提示“Windows 已保护你的电脑”，点击 **更多信息 → 仍要运行** 即可。
-          - **Linux (AppImage)**：如提示无执行权限，先运行 `chmod +x Meeting-Notes-*.AppImage` 后双击或命令行启动。
-          EOF
+          node scripts/generate-release-notes.mjs \
+            --tag "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --out release-notes.md
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          cat release-notes.md
       - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VER="${RELEASE_TAG#v}"
+          PRERELEASE_FLAG=""
+          LATEST_FLAG="--latest"
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+            LATEST_FLAG=""
+          fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist-release/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Meeting Notes $RELEASE_TAG" --notes-file release-notes.md
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Meeting Notes $VER" \
+              --draft=false \
+              $PRERELEASE_FLAG \
+              --notes-file release-notes.md
           else
             gh release create "$RELEASE_TAG" dist-release/* \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Meeting Notes $RELEASE_TAG" \
+              --title "Meeting Notes $VER" \
+              $PRERELEASE_FLAG \
+              $LATEST_FLAG \
               --notes-file release-notes.md
           fi

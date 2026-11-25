@@ -7,11 +7,13 @@ import type { MeetingDetector } from "./meetingDetector";
 import type { QuickAskController } from "./quickAsk";
 import type { SidecarManager } from "./sidecar";
 import type { RecorderSyncState, TrayController } from "./tray";
+import type { AppUpdaterService } from "./updater";
 import { applyNativeThemeMode, getThemeBackgroundColor, writeDesktopConfig } from "./window";
 
 export interface IpcContext {
   sidecar: SidecarManager;
   tray: TrayController;
+  updater: AppUpdaterService;
   setRecorderState: (next: RecorderSyncState) => void;
   onShowMain: (hash?: string) => void;
   onConfirmQuit?: () => void;
@@ -139,4 +141,17 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ipcMain.on(IPC.APP_QUIT_CONFIRM, () => {
     ctx.onConfirmQuit?.();
   });
+
+  ipcMain.handle(IPC.UPDATER_STATUS, () => ctx.updater.getStatus());
+  ipcMain.handle(IPC.UPDATER_CHECK, () => ctx.updater.checkForUpdates());
+  ipcMain.handle(IPC.UPDATER_DOWNLOAD, () => ctx.updater.downloadUpdate());
+  ipcMain.handle(IPC.UPDATER_INSTALL, () => ctx.updater.installUpdate());
+  ipcMain.handle(IPC.UPDATER_SET_AUTO_CHECK, (_ev, enabled: unknown) => {
+    const next = Boolean(enabled);
+    writeDesktopConfig({ autoCheckUpdates: next });
+    return ctx.updater.setAutoCheck(next);
+  });
+  ipcMain.handle(IPC.UPDATER_OPEN_RELEASE, (_ev, rawUrl?: unknown) =>
+    ctx.updater.openReleasePage(typeof rawUrl === "string" ? rawUrl : undefined),
+  );
 }

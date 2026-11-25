@@ -25,4 +25,11 @@ export const IPC = {
   THEME_CHANGED: "theme:changed",
   APP_QUIT_REQUESTED: "app:quitRequested",
   APP_QUIT_CONFIRM: "app:quitConfirm",
+  UPDATER_STATUS: "updater:status",
+  UPDATER_CHECK: "updater:check",
+  UPDATER_DOWNLOAD: "updater:download",
+  UPDATER_INSTALL: "updater:install",
+  UPDATER_SET_AUTO_CHECK: "updater:setAutoCheck",
+  UPDATER_OPEN_RELEASE: "updater:openRelease",
+  UPDATER_STATUS_CHANGED: "updater:statusChanged",
 } as const;

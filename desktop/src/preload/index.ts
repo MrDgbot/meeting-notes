@@ -7,6 +7,7 @@ import type {
   SidecarLogEntry,
   SidecarStatus,
   ThemeMode,
+  UpdateStatus,
 } from "@shared/types";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -49,6 +50,13 @@ const desktopAPI: DesktopAPI = {
   onThemeChanged: (cb) => subscribe<ThemeMode>(IPC.THEME_CHANGED, cb),
   confirmQuit: () => ipcRenderer.send(IPC.APP_QUIT_CONFIRM),
   onQuitRequested: (cb) => subscribeVoid(IPC.APP_QUIT_REQUESTED, cb),
+  getUpdateStatus: () => ipcRenderer.invoke(IPC.UPDATER_STATUS),
+  checkForUpdates: () => ipcRenderer.invoke(IPC.UPDATER_CHECK),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.UPDATER_DOWNLOAD),
+  installUpdate: () => ipcRenderer.invoke(IPC.UPDATER_INSTALL),
+  setAutoCheckUpdates: (enabled) => ipcRenderer.invoke(IPC.UPDATER_SET_AUTO_CHECK, enabled),
+  openReleasePage: (url) => ipcRenderer.invoke(IPC.UPDATER_OPEN_RELEASE, url),
+  onUpdateStatus: (cb) => subscribe<UpdateStatus>(IPC.UPDATER_STATUS_CHANGED, cb),
 };
 
 contextBridge.exposeInMainWorld("desktopAPI", desktopAPI);

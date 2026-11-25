@@ -666,6 +666,41 @@ export interface DetectedMeetingApp {
   detectedAt: number;
 }
 
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "error";
+
+export interface UpdateInfo {
+  version: string;
+  releaseName?: string;
+  releaseDate?: string;
+  releaseNotes?: string;
+  releaseUrl?: string;
+}
+
+export interface UpdateProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+export interface UpdateStatus {
+  status: UpdatePhase;
+  currentVersion: string;
+  autoCheck: boolean;
+  canAutoInstall: boolean;
+  info?: UpdateInfo | null;
+  progress?: UpdateProgress | null;
+  error?: string;
+  checkedAt?: number | null;
+}
+
 export interface DesktopAPI {
   getInfo: () => Promise<DesktopRuntimeInfo>;
   getSidecarStatus: () => Promise<SidecarStatus>;
@@ -698,4 +733,11 @@ export interface DesktopAPI {
   onThemeChanged: (cb: (mode: ThemeMode) => void) => () => void;
   confirmQuit: () => void;
   onQuitRequested: (cb: () => void) => () => void;
+  getUpdateStatus: () => Promise<UpdateStatus>;
+  checkForUpdates: () => Promise<UpdateStatus>;
+  downloadUpdate: () => Promise<UpdateStatus>;
+  installUpdate: () => Promise<boolean>;
+  setAutoCheckUpdates: (enabled: boolean) => Promise<UpdateStatus>;
+  openReleasePage: (url?: string) => Promise<boolean>;
+  onUpdateStatus: (cb: (status: UpdateStatus) => void) => () => void;
 }

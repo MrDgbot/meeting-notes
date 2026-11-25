@@ -14,6 +14,7 @@ export interface DesktopConfig {
   backendDir?: string;
   themeMode?: ThemeMode;
   bootstrapMirror?: BootstrapMirror;
+  autoCheckUpdates?: boolean;
 }
 
 const DEFAULT_BOUNDS: WindowBounds = { width: 1320, height: 860 };
@@ -33,6 +34,7 @@ export function readDesktopConfig(): DesktopConfig {
       ...(raw.bootstrapMirror === "cn" || raw.bootstrapMirror === "official"
         ? { bootstrapMirror: raw.bootstrapMirror }
         : {}),
+      ...(typeof raw.autoCheckUpdates === "boolean" ? { autoCheckUpdates: raw.autoCheckUpdates } : {}),
     };
   } catch {
     return {};

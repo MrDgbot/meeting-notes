@@ -5,6 +5,7 @@ import {
   BookOpenText,
   CheckSquare,
   CircleHelp,
+  Download,
   FolderKanban,
   Mic,
   Monitor,
@@ -66,7 +67,9 @@ export function Sidebar() {
   const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
   const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const openSettingsTab = useAppStore((s) => s.openSettingsTab);
   const setSidecarOpen = useAppStore((s) => s.setSidecarOpen);
+  const updateStatus = useAppStore((s) => s.updateStatus);
   const trashCount = useAppStore((s) => s.trashCount);
   const setTrashOpen = useAppStore((s) => s.setTrashOpen);
   const refreshHealth = useAppStore((s) => s.refreshHealth);
@@ -512,6 +515,26 @@ export function Sidebar() {
               </button>
             )}
           </nav>
+
+          {updateStatus && (updateStatus.status === "available" || updateStatus.status === "downloaded") && (
+            <div className="px-3 pb-1.5">
+              <button
+                type="button"
+                onClick={() => openSettingsTab("about")}
+                className="w-full min-h-[30px] rounded-[8px] px-2.5 py-1 text-xs bg-[var(--fill)] hover:bg-[var(--fill-2)] text-[var(--text)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+              >
+                <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
+                  <Download className="w-3.5 h-3.5 shrink-0 text-[var(--link)]" aria-hidden="true" />
+                  <span className="truncate">
+                    {updateStatus.status === "downloaded"
+                      ? "新版本已就绪 · 点击安装"
+                      : `发现新版本 v${updateStatus.info?.version ?? ""}`}
+                  </span>
+                </span>
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--link)] shrink-0" aria-hidden="true" />
+              </button>
+            </div>
+          )}
 
           {trashCount > 0 && (
             <div className="px-3 pb-1.5">
