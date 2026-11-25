@@ -125,6 +125,7 @@ export function RecordingView({ meeting }: RecordingViewProps) {
               ? "只录麦克风"
               : "正在录音并实时转写";
 
+  const isWarnState = Boolean(lost || stall || paused || stopping);
   const meterPct = Math.min(100, Math.round(Math.sqrt(Math.max(0, level)) * 140));
 
   const handleStop = async () => {
@@ -160,15 +161,15 @@ export function RecordingView({ meeting }: RecordingViewProps) {
   return (
     <div className="space-y-4">
       {stopping && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--fill)] px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
+        <div className="rounded-[12px] bg-[var(--surface-2)] shadow-[var(--shadow-1)] px-4 py-3 flex items-center justify-between gap-3 text-[13px] leading-[20px] text-[var(--text)]">
           <span>
             正在把剩下的录音传到后端…
             {conn !== "ok" ? " 连接断开了，正在重连；" : ""}
-            已暂存 {fmtDur(pendingSec)}
+            已暂存 <span className="num font-medium">{fmtDur(pendingSec)}</span>
           </span>
           <InlineConfirm
             triggerLabel="不等了，直接结束"
-            triggerClassName="btn-secondary rounded-lg px-2.5 py-1 text-xs"
+            triggerClassName="h-8 rounded-[8px] bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-3 text-[13px] leading-[20px] font-medium text-[var(--text)] whitespace-nowrap shrink-0 transition-colors"
             message={`还有 ${fmtDur(pendingSec)} 暂存录音未传完，强行结束会丢失这段尾部音频。`}
             confirmLabel="直接结束"
             onConfirm={giveUp}
@@ -177,19 +178,19 @@ export function RecordingView({ meeting }: RecordingViewProps) {
       )}
 
       {!stopping && conn === "reconnecting" && (
-        <div className="rounded-xl border border-[var(--amber)]/40 bg-[var(--amber-weak)] px-4 py-2.5 text-xs text-[var(--text)]">
-          和后端的连接断开了，正在重连… 录音没有停，已暂存 {fmtDur(pendingSec)}（最多 15
-          分钟），连上后自动补传
+        <div className="rounded-[12px] bg-[var(--warn-soft)] ring-1 ring-inset ring-[var(--warn)]/25 px-4 py-3 text-[13px] leading-[20px] text-[var(--text)]">
+          和后端的连接断开了，正在重连… 录音没有停，已暂存{" "}
+          <span className="num font-medium">{fmtDur(pendingSec)}</span>（最多 15 分钟），连上后自动补传
         </div>
       )}
 
       {!stopping && stall && (
-        <div className="rounded-xl border border-[var(--red)]/40 bg-[var(--red-weak)] px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
+        <div className="rounded-[12px] bg-[var(--danger-soft)] ring-1 ring-inset ring-[var(--danger)]/25 px-4 py-3 flex items-center justify-between gap-3 text-[13px] leading-[20px] text-[var(--text)]">
           <span>现在录不到声音：{GAP_TEXT[stall.reason] || GAP_TEXT.stall}</span>
           <button
             type="button"
             onClick={() => void reconnectDevice()}
-            className="btn-secondary rounded-lg px-2.5 py-1 cursor-pointer"
+            className="h-8 rounded-[8px] bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-3 text-[13px] leading-[20px] font-medium text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
           >
             继续录音
           </button>
@@ -197,38 +198,48 @@ export function RecordingView({ meeting }: RecordingViewProps) {
       )}
 
       {!stopping && lost && (
-        <div className="rounded-xl border border-[var(--red)]/40 bg-[var(--red-weak)] px-4 py-2.5 flex items-center justify-between gap-3 text-xs">
+        <div className="rounded-[12px] bg-[var(--danger-soft)] ring-1 ring-inset ring-[var(--danger)]/25 px-4 py-3 flex items-center justify-between gap-3 text-[13px] leading-[20px] text-[var(--text)]">
           <span>
             {lost === "sys" ? "电脑声音已断开，现在只录到麦克风" : "麦克风断开了，现在什么都录不到"}
           </span>
           <button
             type="button"
             onClick={() => void reconnectDevice().catch((e) => pushToast(String(e), 5000))}
-            className="btn-secondary rounded-lg px-2.5 py-1 inline-flex items-center gap-1 cursor-pointer"
+            className="h-8 rounded-[8px] bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-3 text-[13px] leading-[20px] font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className="w-3.5 h-3.5 shrink-0" />
             重新连接{lost === "sys" ? "电脑声音" : "麦克风"}
           </button>
         </div>
       )}
 
-      <div className="card-surface p-3.5 flex flex-wrap items-center gap-3">
-        <span
-          className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-            lost || stall || paused || stopping ? "bg-[var(--amber)]" : "bg-[var(--red)] rec-dot"
+      <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-3 flex flex-wrap items-center gap-3">
+        <div
+          className={`inline-flex items-center gap-2 h-7 px-2.5 rounded-full whitespace-nowrap shrink-0 ${
+            isWarnState ? "bg-[var(--warn-soft)]" : "bg-[var(--danger-soft)]"
           }`}
-          aria-hidden="true"
-        />
-        <span className="font-mono text-base font-semibold num">{fmtTs(elapsedMs)}</span>
+        >
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${
+              isWarnState ? "bg-[var(--warn)]" : "bg-[var(--danger)] rec-dot"
+            }`}
+            aria-hidden="true"
+          />
+          <span className="text-xs leading-[18px] font-semibold text-[var(--text)] num-mono">
+            {fmtTs(elapsedMs)}
+          </span>
+        </div>
 
-        <div className="w-28 h-2 rounded-full bg-[var(--fill)] overflow-hidden" aria-hidden="true">
+        <div className="w-24 h-1.5 rounded-full bg-[var(--fill)] overflow-hidden shrink-0" aria-hidden="true">
           <div
-            className="h-full w-full origin-left bg-[var(--green)] transition-transform duration-75"
+            className="h-full w-full origin-left bg-[var(--ok)] transition-transform duration-75"
             style={{ transform: `scaleX(${(meterPct / 100).toFixed(3)})` }}
           />
         </div>
 
-        <span className="text-xs text-[var(--muted)]">{statusText}</span>
+        <span className="text-[13px] leading-[20px] text-[var(--text-2)] whitespace-nowrap">
+          {statusText}
+        </span>
 
         <div className="flex-1" />
 
@@ -237,27 +248,32 @@ export function RecordingView({ meeting }: RecordingViewProps) {
           disabled={stopping || !active}
           onClick={() => void addLiveMark()}
           title="给当前时刻打个点，生成纪要时优先覆盖这里（快捷键 M）"
-          className="btn-secondary rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-9 rounded-[10px] px-3.5 text-sm leading-[22px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
         >
-          <Flag className="w-3.5 h-3.5" />
+          <Flag className="w-4 h-4 text-[var(--text-2)] shrink-0" />
           <span>标记</span>
-          <kbd className="font-mono text-[10.5px] bg-[var(--fill)] px-1 rounded">M</kbd>
+          <kbd className="font-mono text-[11px] leading-[14px] text-[var(--text-2)] bg-[var(--surface)] shadow-[var(--shadow-1)] px-1.5 py-0.5 rounded-[4px] shrink-0">
+            M
+          </kbd>
         </button>
 
         <button
           type="button"
           disabled={stopping}
           onClick={() => (paused ? resume() : pause())}
-          className="btn-secondary rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-9 rounded-[10px] px-3.5 text-sm leading-[22px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
         >
-          <span className="relative w-3.5 h-3.5 inline-flex items-center justify-center" aria-hidden="true">
+          <span
+            className="relative w-4 h-4 inline-flex items-center justify-center shrink-0"
+            aria-hidden="true"
+          >
             <Play
-              className={`w-3.5 h-3.5 absolute transition-[opacity,transform] duration-150 ${
+              className={`w-4 h-4 absolute transition-[opacity,transform] duration-150 ${
                 paused ? "opacity-100 scale-100" : "opacity-0 scale-75"
               }`}
             />
             <Pause
-              className={`w-3.5 h-3.5 absolute transition-[opacity,transform] duration-150 ${
+              className={`w-4 h-4 absolute transition-[opacity,transform] duration-150 ${
                 paused ? "opacity-0 scale-75" : "opacity-100 scale-100"
               }`}
             />
@@ -269,29 +285,31 @@ export function RecordingView({ meeting }: RecordingViewProps) {
           type="button"
           disabled={stopping}
           onClick={() => void handleStop()}
-          className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] active:scale-[0.97] text-white inline-flex items-center gap-1.5 cursor-pointer transition-[background-color,transform] duration-150"
+          className="h-9 rounded-[10px] px-4 text-sm leading-[22px] font-medium bg-[var(--danger)] hover:opacity-90 active:scale-[0.98] text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-[opacity,transform] duration-150"
         >
-          <Square className="w-3.5 h-3.5 fill-current" />
+          <Square className="w-3.5 h-3.5 fill-current shrink-0" />
           <span>{stopping ? "保存中…" : "结束录音"}</span>
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-2 text-xs leading-[18px]">
         {meeting.marks.length ? (
           <>
-            <span className="text-[var(--muted)]">打点 {meeting.marks.length}：</span>
+            <span className="text-[var(--muted)] font-medium whitespace-nowrap shrink-0">
+              打点 <span className="num">{meeting.marks.length}</span>：
+            </span>
             {meeting.marks.map((m) => (
               <span
                 key={m.id}
-                className="inline-flex items-center gap-1 rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2.5 py-0.5 font-mono text-[11px] num"
+                className="h-7 inline-flex items-center gap-1.5 rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2.5 text-xs leading-[18px] font-medium num-mono whitespace-nowrap shrink-0"
               >
-                <Flag className="w-3 h-3" />
+                <Flag className="w-3 h-3 shrink-0" />
                 {fmtTs(m.t_ms)}
                 <button
                   type="button"
                   onClick={() => void deleteMark(m.id)}
                   aria-label={`删除 ${fmtTs(m.t_ms)} 打点`}
-                  className="hover:opacity-75 ml-0.5 cursor-pointer"
+                  className="hover:opacity-75 rounded-full p-0.5 cursor-pointer transition-opacity"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -299,24 +317,26 @@ export function RecordingView({ meeting }: RecordingViewProps) {
             ))}
           </>
         ) : (
-          <span className="text-[var(--muted)]">
+          <span className="text-xs leading-[18px] text-[var(--muted)]">
             按「标记」或键盘 M / 全局 ⌘⇧M，给重点内容打个点；生成纪要时会优先覆盖这些地方
           </span>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <section className="card-surface p-4 flex flex-col h-[58vh]">
-          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[var(--line-2)]">
-            <h2 className="text-sm font-semibold m-0">实时转写</h2>
-            <span className="text-xs text-[var(--muted)]">
+        <section className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 flex flex-col h-[58vh]">
+          <div className="flex items-center justify-between gap-2 min-h-[45px] pb-3 border-b border-[var(--line-2)]">
+            <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] whitespace-nowrap shrink-0 m-0">
+              实时转写
+            </h2>
+            <span className="text-xs leading-[18px] text-[var(--muted)] truncate min-w-0">
               {channels === 2 ? "麦克风和电脑声音分开识别；会后再精转" : "会后会重新精准转写并区分说话人"}
             </span>
           </div>
 
-          <div ref={liveBoxRef} className="flex-1 overflow-y-auto pt-3 space-y-2.5 text-sm">
+          <div ref={liveBoxRef} className="flex-1 overflow-y-auto pt-3.5 space-y-3">
             {!timeline.length && !partial ? (
-              <div className="h-full flex items-center justify-center text-xs text-[var(--muted)]">
+              <div className="h-full flex items-center justify-center text-sm leading-[22px] text-[var(--muted)]">
                 开始说话，文字会实时出现在这里
               </div>
             ) : (
@@ -326,11 +346,12 @@ export function RecordingView({ meeting }: RecordingViewProps) {
                     return (
                       <div
                         key={item.key}
-                        className="rounded-lg bg-[var(--amber-weak)] text-[var(--amber)] px-2.5 py-1.5 text-xs flex items-center gap-1.5"
+                        className="rounded-[10px] bg-[var(--warn-soft)] text-[var(--warn)] px-3 py-2 text-xs leading-[18px] flex items-center gap-2"
                       >
                         <Clock className="w-3.5 h-3.5 shrink-0" />
                         <span>
-                          这里有 {fmtDur(Math.max(1, item.gap.dur_ms / 1000))} 没录到：
+                          这里有 <span className="num">{fmtDur(Math.max(1, item.gap.dur_ms / 1000))}</span>{" "}
+                          没录到：
                           {GAP_TEXT[item.gap.reason] || GAP_TEXT.stall}
                         </span>
                       </div>
@@ -338,24 +359,28 @@ export function RecordingView({ meeting }: RecordingViewProps) {
                   }
                   const tag = item.seg.ch === 0 ? "我" : item.seg.ch === 1 ? "对方" : "";
                   return (
-                    <div key={item.key} className="flex items-start gap-2.5">
-                      <span className="font-mono text-xs text-[var(--muted)] num pt-0.5 shrink-0">
+                    <div key={item.key} className="flex items-start gap-3">
+                      <span className="text-xs leading-[26px] text-[var(--muted)] num-mono whitespace-nowrap shrink-0">
                         {fmtTs(item.seg.start)}
                       </span>
-                      <div className="flex-1 leading-relaxed">
+                      <div className="flex-1 min-w-0 text-[15px] leading-[26px] text-[var(--text-body)]">
                         {tag && (
-                          <span className="text-xs font-medium text-[var(--muted)] mr-1.5">{tag} ·</span>
+                          <span className="inline-flex items-center text-xs leading-[18px] font-medium text-[var(--text-2)] bg-[var(--fill)] rounded-[6px] px-1.5 py-0.5 mr-2 align-baseline whitespace-nowrap shrink-0">
+                            {tag}
+                          </span>
                         )}
-                        <span className="text-[var(--text-body)]">{item.seg.text}</span>
+                        <span>{item.seg.text}</span>
                       </div>
                     </div>
                   );
                 })}
 
                 {partial && (
-                  <div className="flex items-start gap-2.5 text-[var(--muted)] italic">
-                    <span className="font-mono text-xs num pt-0.5 shrink-0">{fmtTs(elapsedMs)}</span>
-                    <div className="flex-1">
+                  <div className="flex items-start gap-3 text-[var(--muted)] italic">
+                    <span className="text-xs leading-[26px] num-mono whitespace-nowrap shrink-0">
+                      {fmtTs(elapsedMs)}
+                    </span>
+                    <div className="flex-1 min-w-0 text-[15px] leading-[26px]">
                       {partial.ch === 0 ? "我 · " : partial.ch === 1 ? "对方 · " : ""}
                       {partial.text}…
                     </div>
@@ -366,15 +391,17 @@ export function RecordingView({ meeting }: RecordingViewProps) {
           </div>
         </section>
 
-        <section className="card-surface p-4 flex flex-col h-[58vh]">
-          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[var(--line-2)]">
-            <h2 className="text-sm font-semibold m-0">我的笔记</h2>
+        <section className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 flex flex-col h-[58vh]">
+          <div className="flex items-center justify-between gap-2 min-h-[45px] pb-3 border-b border-[var(--line-2)]">
+            <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] whitespace-nowrap shrink-0 m-0">
+              我的笔记
+            </h2>
             <button
               type="button"
               onClick={insertTimestamp}
-              className="btn-secondary rounded-lg px-2.5 py-1 text-xs inline-flex items-center gap-1 cursor-pointer"
+              className="h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-2.5 text-[13px] leading-[20px] font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              <Clock className="w-3.5 h-3.5" />
+              <Clock className="w-3.5 h-3.5 text-[var(--text-2)] shrink-0" />
               插入时间点
             </button>
           </div>
@@ -384,9 +411,9 @@ export function RecordingView({ meeting }: RecordingViewProps) {
             onChange={(e) => setNotesDraft(meeting.meta.id, e.target.value)}
             aria-label="我的笔记"
             placeholder={"记录重点、决定、待办……\nAI 生成纪要时会重点参考这里的内容"}
-            className="flex-1 mt-3 p-3 text-sm resize-none"
+            className="flex-1 mt-3.5 p-3.5 rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] focus:bg-[var(--surface-elev)] focus:border-[var(--line-focus)] text-[15px] leading-[26px] text-[var(--text-body)] placeholder:text-[var(--muted)] resize-none transition-colors"
           />
-          <div className="mt-2 text-xs text-[var(--muted)] min-h-[18px]">
+          <div className="mt-2.5 text-xs leading-[18px] text-[var(--muted)] min-h-[18px]">
             {pendingNote?.saving
               ? "保存中…"
               : pendingNote?.error

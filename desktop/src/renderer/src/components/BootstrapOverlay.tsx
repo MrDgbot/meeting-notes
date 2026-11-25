@@ -81,11 +81,13 @@ export function BootstrapOverlay() {
       <div className="h-[38px] shrink-0 app-drag" aria-hidden="true" />
 
       <div className="flex-1 flex items-center justify-center px-5 pb-10 pt-2">
-        <div className="w-full max-w-[560px] rounded-[20px] bg-[var(--surface)] border border-[var(--line-2)] shadow-[var(--shadow-1)] p-6 sm:p-7 space-y-5">
+        <div className="w-full max-w-[560px] rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-2)] p-6 sm:p-7 space-y-5">
           <div className="flex items-start gap-3.5">
             <span
               className={`w-10 h-10 rounded-[12px] flex items-center justify-center shrink-0 ${
-                isError ? "bg-[var(--red-weak)] text-[var(--red)]" : "bg-[var(--ink)] text-[var(--ink-inv)]"
+                isError
+                  ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                  : "bg-[var(--ink)] text-[var(--ink-fg)]"
               }`}
             >
               {isError ? (
@@ -95,46 +97,48 @@ export function BootstrapOverlay() {
               )}
             </span>
             <div className="min-w-0">
-              <h1 className="text-[17px] font-semibold tracking-[-0.015em] text-[var(--text)] m-0">
+              <h1 className="text-[18px] leading-[26px] font-semibold tracking-[-0.01em] text-[var(--text)] m-0">
                 {title}
               </h1>
-              <p className="text-[12.5px] text-[var(--muted)] mt-1 m-0">{subtitle}</p>
+              <p className="text-[13px] leading-[20px] text-[var(--text-2)] mt-1 m-0">{subtitle}</p>
             </div>
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs gap-2">
+            <div className="flex items-center justify-between text-[13px] leading-[20px] gap-2">
               <span className="text-[var(--text-2)] truncate">{boot.message}</span>
               <span className="num text-[var(--muted)] shrink-0">{pct}%</span>
             </div>
             <div className="w-full h-2 rounded-full bg-[var(--fill)] overflow-hidden">
               <div
                 className={`h-full rounded-full transition-[width] duration-300 ${
-                  isError ? "bg-[var(--red)]" : "bg-[var(--ink)]"
+                  isError ? "bg-[var(--danger)]" : "bg-[var(--ink)]"
                 }`}
                 style={{ width: `${pct}%` }}
               />
             </div>
             {latestLog && !logsExpanded && (
-              <div className="text-[11.5px] font-mono text-[var(--muted)] truncate pt-0.5">{latestLog}</div>
+              <div className="text-xs leading-[18px] font-mono text-[var(--muted)] truncate pt-0.5">
+                {latestLog}
+              </div>
             )}
           </div>
 
-          <div className="space-y-2 rounded-[14px] bg-[var(--fill)] p-3.5">
+          <div className="space-y-2 rounded-[12px] bg-[var(--surface-2)] p-4">
             {STEPS.map((st, idx) => {
               const done = !isError && idx < activeIdx;
               const current = idx === activeIdx;
               return (
                 <div key={st.key} className="flex items-start gap-2.5 py-1">
                   <span
-                    className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[11px] shrink-0 ${
+                    className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center text-xs leading-none num shrink-0 ${
                       done
-                        ? "bg-[var(--green)] text-white"
+                        ? "bg-[var(--ok)] text-white"
                         : current
                           ? isError
-                            ? "bg-[var(--red)] text-white"
-                            : "bg-[var(--ink)] text-[var(--ink-inv)]"
-                          : "bg-[var(--surface)] text-[var(--muted)] border border-[var(--line-2)]"
+                            ? "bg-[var(--danger)] text-white"
+                            : "bg-[var(--ink)] text-[var(--ink-fg)]"
+                          : "bg-[var(--surface)] text-[var(--muted)] border border-[var(--line)]"
                     }`}
                   >
                     {done ? (
@@ -147,13 +151,13 @@ export function BootstrapOverlay() {
                   </span>
                   <div className="min-w-0">
                     <div
-                      className={`text-[13px] font-medium leading-snug ${
+                      className={`text-sm leading-[22px] font-medium ${
                         done || current ? "text-[var(--text)]" : "text-[var(--muted)]"
                       }`}
                     >
                       {st.label}
                     </div>
-                    <div className="text-[11.5px] text-[var(--muted)]">{st.desc}</div>
+                    <div className="text-xs leading-[18px] text-[var(--text-2)]">{st.desc}</div>
                   </div>
                 </div>
               );
@@ -161,7 +165,7 @@ export function BootstrapOverlay() {
           </div>
 
           {isError && sidecarStatus?.error && (
-            <div className="rounded-[12px] bg-[var(--red-weak)] text-[var(--red)] px-3.5 py-2.5 text-xs leading-relaxed break-words">
+            <div className="rounded-[12px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px] break-words">
               {sidecarStatus.error}
             </div>
           )}
@@ -176,9 +180,9 @@ export function BootstrapOverlay() {
                 disabled={retrying}
                 aria-pressed={currentMirror === "cn"}
                 onClick={() => void triggerRetry("cn")}
-                className={`rounded-[8px] px-3 h-8 text-xs cursor-pointer transition-colors ${
+                className={`rounded-[8px] px-3 h-8 text-[13px] leading-[20px] whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                   currentMirror === "cn"
-                    ? "bg-[var(--ink)] text-[var(--ink-inv)] font-medium"
+                    ? "bg-[var(--fill-hover)] text-[var(--text)] font-medium shadow-[inset_0_0_0_1px_var(--line-focus)]"
                     : "btn-secondary"
                 }`}
               >
@@ -189,9 +193,9 @@ export function BootstrapOverlay() {
                 disabled={retrying}
                 aria-pressed={currentMirror === "official"}
                 onClick={() => void triggerRetry("official")}
-                className={`rounded-[8px] px-3 h-8 text-xs cursor-pointer transition-colors ${
+                className={`rounded-[8px] px-3 h-8 text-[13px] leading-[20px] whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                   currentMirror === "official"
-                    ? "bg-[var(--ink)] text-[var(--ink-inv)] font-medium"
+                    ? "bg-[var(--fill-hover)] text-[var(--text)] font-medium shadow-[inset_0_0_0_1px_var(--line-focus)]"
                     : "btn-secondary"
                 }`}
               >
@@ -204,7 +208,7 @@ export function BootstrapOverlay() {
                 type="button"
                 disabled={retrying}
                 onClick={() => void triggerRetry(currentMirror)}
-                className="btn-primary rounded-[9px] px-4 h-9 text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                className="btn-primary rounded-[10px] px-4 h-9 text-sm leading-[22px] font-medium whitespace-nowrap shrink-0 inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${retrying ? "animate-spin" : ""}`} aria-hidden="true" />
                 <span>{retrying ? "重试中…" : "重试初始化"}</span>
@@ -218,7 +222,7 @@ export function BootstrapOverlay() {
                 type="button"
                 aria-expanded={logsExpanded}
                 onClick={() => setLogsExpanded((v) => !v)}
-                className="btn-ghost rounded-[8px] px-2.5 h-8 text-xs inline-flex items-center gap-1 cursor-pointer"
+                className="btn-ghost rounded-[8px] px-2.5 h-8 text-[13px] leading-[20px] whitespace-nowrap shrink-0 inline-flex items-center gap-1 cursor-pointer"
               >
                 <ChevronDown
                   className={`w-3.5 h-3.5 transition-transform duration-150 ${logsExpanded ? "rotate-180" : ""}`}
@@ -232,7 +236,7 @@ export function BootstrapOverlay() {
             {logsExpanded && (
               <div
                 ref={logRef}
-                className="max-h-44 overflow-y-auto rounded-[10px] bg-[var(--bg)] border border-[var(--line-2)] p-2.5 font-mono text-[11px] leading-relaxed space-y-0.5"
+                className="max-h-44 overflow-y-auto rounded-[12px] bg-[var(--surface-2)] border border-[var(--line-2)] p-3 font-mono text-xs leading-[18px] space-y-0.5"
               >
                 {sidecarLogs.length === 0 ? (
                   <div className="text-[var(--muted)]">等待日志输出…</div>
@@ -242,13 +246,13 @@ export function BootstrapOverlay() {
                       key={`${entry.ts}-${idx}`}
                       className={`whitespace-pre-wrap break-all ${
                         entry.stream === "stderr"
-                          ? "text-[var(--red)]"
+                          ? "text-[var(--danger)]"
                           : entry.stream === "system"
-                            ? "text-[var(--link)]"
+                            ? "text-[var(--text)] font-medium"
                             : "text-[var(--text-body)]"
                       }`}
                     >
-                      <span className="text-[var(--muted)] mr-2 num">
+                      <span className="text-[var(--muted)] mr-2 num-mono">
                         {new Date(entry.ts).toTimeString().slice(0, 8)}
                       </span>
                       {entry.line}

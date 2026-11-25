@@ -288,18 +288,18 @@ export function TodosPage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-5 py-6 space-y-4">
+    <div className="max-w-[960px] mx-auto px-7 sm:px-9 py-7 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold m-0 flex items-center gap-2">
+          <h1 className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 flex items-center gap-2.5 whitespace-nowrap">
             {viewMode === "todos" ? (
-              <CheckSquare className="w-5 h-5 text-[var(--muted)]" aria-hidden="true" />
+              <CheckSquare className="w-5 h-5 text-[var(--muted)] shrink-0" aria-hidden="true" />
             ) : (
-              <Radar className="w-5 h-5 text-[var(--muted)]" aria-hidden="true" />
+              <Radar className="w-5 h-5 text-[var(--muted)] shrink-0" aria-hidden="true" />
             )}
             <span>待办中心</span>
           </h1>
-          <p className="text-xs text-[var(--muted)] m-0 mt-1 num">
+          <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0 mt-1 num">
             {viewMode === "todos"
               ? resp
                 ? `当前显示 ${filteredItems.length} 项 · 未完成 ${resp.counts.open} · 已完成 ${resp.counts.done}`
@@ -334,10 +334,10 @@ export function TodosPage() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <div className="relative flex-1 min-w-[220px]">
           <Search
-            className="w-3.5 h-3.5 text-[var(--muted)] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+            className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
             aria-hidden="true"
           />
           <input
@@ -346,16 +346,16 @@ export function TodosPage() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder={viewMode === "todos" ? "过滤待办关键词或会议名…" : "过滤承诺内容、承诺人或会议名…"}
             aria-label="过滤待办或承诺列表"
-            className="w-full pl-8 pr-8 py-1.5 text-xs"
+            className="w-full h-9 pl-9 pr-9 rounded-[10px] text-sm leading-[22px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
           />
           {search && (
             <button
               type="button"
               onClick={() => setSearch("")}
               aria-label="清空搜索"
-              className="absolute right-1 top-1/2 -translate-y-1/2 w-[26px] h-[26px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 inline-flex items-center justify-center rounded-[6px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--fill)] cursor-pointer transition-colors"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           )}
         </div>
@@ -369,7 +369,7 @@ export function TodosPage() {
               id="todoPersonSel"
               value={personFilter}
               onChange={(e) => setPersonFilter(e.target.value)}
-              className="text-xs px-2.5 py-1.5"
+              className="h-9 rounded-[10px] text-sm leading-[22px] px-3 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
             >
               <option value="">全部相关人</option>
               {people.map((p) => (
@@ -394,19 +394,19 @@ export function TodosPage() {
       </div>
 
       {viewMode === "todos" ? (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {loading && !resp ? (
-            <div className="card-surface p-4">
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5">
               <SkeletonLines lines={4} />
             </div>
           ) : !filteredItems.length ? (
-            <div className="card-surface py-12 text-center space-y-2">
-              <div className="text-sm text-[var(--muted)]">没有符合条件的待办事项</div>
+            <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] py-14 px-6 text-center space-y-3">
+              <div className="text-sm leading-[22px] text-[var(--muted)]">没有符合条件的待办事项</div>
               {hasNarrowFilters && (
                 <button
                   type="button"
                   onClick={resetFilters}
-                  className="btn-secondary rounded-lg px-3 py-1 text-xs cursor-pointer"
+                  className="btn-secondary rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   重置筛选
                 </button>
@@ -422,37 +422,39 @@ export function TodosPage() {
                   data-collapsing={collapsingTodos[rowKey] ? "true" : undefined}
                 >
                   <div>
-                    <div className="card-surface p-3.5 flex items-start gap-3">
+                    <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-3.5 flex items-start gap-3">
                       <input
                         type="checkbox"
                         checked={it.done}
                         onChange={(e) => void handleToggle(it, e.target.checked)}
                         aria-label={`标记完成：${it.text}`}
-                        className="mt-1 w-4 h-4 shrink-0 cursor-pointer"
+                        className="mt-[3px] w-4 h-4 shrink-0 cursor-pointer"
                       />
                       <div className="flex-1 min-w-0">
                         <div
-                          className={`text-sm leading-snug transition-colors duration-150 ${
+                          className={`text-sm leading-[22px] transition-colors duration-150 ${
                             it.done ? "line-through text-[var(--muted)]" : "text-[var(--text)]"
                           }`}
                         >
                           {it.text}
                         </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-xs leading-[18px] text-[var(--muted)]">
                           <button
                             type="button"
                             onClick={() => navigate(`#/m/${it.mid}`)}
-                            className="inline-flex items-center gap-1 hover:text-[var(--link)] hover:underline cursor-pointer"
+                            className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-[var(--text)] hover:underline cursor-pointer transition-colors"
                           >
                             <span>{it.meeting_title || "未命名会议"}</span>
-                            <ExternalLink className="w-3 h-3" />
+                            <ExternalLink className="w-3 h-3 shrink-0" aria-hidden="true" />
                           </button>
-                          <span className="num">{(it.meeting_created || "").slice(0, 10)}</span>
+                          <span className="whitespace-nowrap shrink-0 num">
+                            {(it.meeting_created || "").slice(0, 10)}
+                          </span>
                           {it.ts && (
                             <button
                               type="button"
                               onClick={() => navigate(`#/m/${it.mid}?t=${tsToSec(it.ts)}`)}
-                              className="font-mono text-[var(--link)] hover:underline num cursor-pointer"
+                              className="font-mono tabular-nums bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)] px-1.5 py-0.5 rounded-[6px] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                             >
                               [{it.ts}]
                             </button>
@@ -467,19 +469,21 @@ export function TodosPage() {
           )}
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {loading && !commResp ? (
-            <div className="card-surface p-4">
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5">
               <SkeletonLines lines={4} />
             </div>
           ) : !filteredCommitments.length ? (
-            <div className="card-surface py-12 text-center space-y-2">
-              <div className="text-sm text-[var(--muted)]">近 30 天内暂无符合条件的承诺记录</div>
+            <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] py-14 px-6 text-center space-y-3">
+              <div className="text-sm leading-[22px] text-[var(--muted)]">
+                近 30 天内暂无符合条件的承诺记录
+              </div>
               {hasNarrowFilters && (
                 <button
                   type="button"
                   onClick={resetFilters}
-                  className="btn-secondary rounded-lg px-3 py-1 text-xs cursor-pointer"
+                  className="btn-secondary rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   重置筛选
                 </button>
@@ -495,21 +499,21 @@ export function TodosPage() {
                   data-collapsing={collapsingCommits[rowKey] ? "true" : undefined}
                 >
                   <div>
-                    <div className="card-surface p-3.5 flex items-start gap-3">
+                    <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-3.5 flex items-start gap-3">
                       <input
                         type="checkbox"
                         checked={c.done}
                         onChange={(e) => void handleToggleCommitment(c, e.target.checked)}
                         aria-label={`标记承诺完成：${c.text}`}
-                        className="mt-1 w-4 h-4 shrink-0 cursor-pointer"
+                        className="mt-[3px] w-4 h-4 shrink-0 cursor-pointer"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1.5">
                           <span
-                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                              c.direction === "mine"
-                                ? "bg-[var(--fill-2)] text-[var(--text)]"
-                                : "bg-[var(--amber-weak)] text-[var(--amber)]"
+                            className={`rounded-full px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 ${
+                              c.direction === "theirs"
+                                ? "bg-[var(--warn-soft)] text-[var(--warn)]"
+                                : "bg-[var(--fill)] text-[var(--text-2)]"
                             }`}
                           >
                             {c.direction === "mine"
@@ -518,36 +522,42 @@ export function TodosPage() {
                                 ? "等对方"
                                 : "团队协作"}
                           </span>
-                          {c.who && <span className="text-xs font-medium text-[var(--text-2)]">{c.who}</span>}
+                          {c.who && (
+                            <span className="text-xs leading-[18px] font-medium text-[var(--text-2)] whitespace-nowrap shrink-0">
+                              {c.who}
+                            </span>
+                          )}
                           {c.overdue && !c.done && (
-                            <span className="rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2 py-0.5 text-[11px] font-medium num">
+                            <span className="rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 num">
                               超过 3 天未跟进
                             </span>
                           )}
                           {c.due_hint && (
-                            <span className="rounded bg-[var(--fill)] px-1.5 py-0.5 text-[11px] text-[var(--muted)]">
+                            <span className="rounded-[6px] bg-[var(--fill)] px-2 py-0.5 text-xs leading-[18px] text-[var(--text-2)] whitespace-nowrap shrink-0">
                               {c.due_hint}
                             </span>
                           )}
                         </div>
 
                         <div
-                          className={`text-sm leading-snug transition-colors duration-150 ${
+                          className={`text-sm leading-[22px] transition-colors duration-150 ${
                             c.done ? "line-through text-[var(--muted)]" : "text-[var(--text)]"
                           }`}
                         >
                           {c.text}
                         </div>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-xs leading-[18px] text-[var(--muted)]">
                           <button
                             type="button"
                             onClick={() => navigate(`#/m/${c.mid}`)}
-                            className="inline-flex items-center gap-1 hover:text-[var(--link)] hover:underline cursor-pointer"
+                            className="inline-flex items-center gap-1 text-[var(--text-2)] hover:text-[var(--text)] hover:underline cursor-pointer transition-colors"
                           >
                             <span>{c.meeting_title || "未命名会议"}</span>
-                            <ExternalLink className="w-3 h-3" />
+                            <ExternalLink className="w-3 h-3 shrink-0" aria-hidden="true" />
                           </button>
-                          <span className="num">{(c.created || "").slice(0, 10)}</span>
+                          <span className="whitespace-nowrap shrink-0 num">
+                            {(c.created || "").slice(0, 10)}
+                          </span>
                           {c.ts && (
                             <button
                               type="button"
@@ -556,7 +566,7 @@ export function TodosPage() {
                                   `#/m/${c.mid}?t=${Math.max(0, Math.floor((c.start_ms || 0) / 1000))}`,
                                 )
                               }
-                              className="font-mono text-[var(--link)] hover:underline num cursor-pointer"
+                              className="font-mono tabular-nums bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)] px-1.5 py-0.5 rounded-[6px] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                             >
                               [{c.ts}]
                             </button>
@@ -568,7 +578,7 @@ export function TodosPage() {
                         onClick={() => void handleDismissCommitment(c)}
                         aria-label="忽略此承诺"
                         title="不再提醒"
-                        className="btn-ghost rounded-md w-7 h-7 flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] shrink-0 cursor-pointer"
+                        className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] shrink-0 cursor-pointer"
                       >
                         <X className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>

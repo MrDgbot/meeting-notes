@@ -48,6 +48,22 @@ const LLM_PRESETS: Array<{ name: string; base_url: string; model: string }> = [
   { name: "本机 Ollama", base_url: "http://127.0.0.1:11434/v1", model: "qwen2.5:7b" },
 ];
 
+const FIELD_LABEL = "block text-sm leading-[22px] font-medium text-[var(--text)] mb-1.5";
+const FIELD_INPUT =
+  "h-9 rounded-[10px] text-sm leading-[22px] px-3 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] focus:ring-2 focus:ring-[var(--ink-ring)] transition-colors";
+const FIELD_TEXTAREA =
+  "rounded-[10px] text-sm leading-[22px] px-3 py-2 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] focus:ring-2 focus:ring-[var(--ink-ring)] transition-colors";
+const BTN_BRAND =
+  "h-9 rounded-[10px] px-4 text-sm leading-[22px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 active:scale-[0.98] disabled:opacity-50";
+const BTN_BRAND_SM =
+  "h-8 rounded-[8px] px-3 text-[13px] leading-[20px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 active:scale-[0.98] disabled:opacity-50";
+const BTN_BRAND_SOFT =
+  "h-8 rounded-[8px] px-3 text-[13px] leading-[20px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] border border-[var(--line)] inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 disabled:opacity-50";
+const BTN_SECONDARY_MD =
+  "btn-secondary h-9 rounded-[10px] px-3.5 text-sm leading-[22px] font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer";
+const BTN_SECONDARY_SM =
+  "btn-secondary h-8 rounded-[8px] px-3 text-[13px] leading-[20px] font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer";
+
 interface EditableProvider extends LlmProvider {
   api_key_input?: string;
 }
@@ -366,13 +382,17 @@ export function SettingsModal() {
       onClose={() => setOpen(false)}
       label="设置"
       maxWidthClass="max-w-4xl"
-      panelClassName="h-[86vh] max-h-[calc(100vh-32px)] border border-[var(--line)] flex flex-col sm:flex-row"
+      backdropClassName="bg-[var(--backdrop)] backdrop-blur-[4px]"
+      panelClassName="h-[85vh] max-h-[calc(100vh-32px)] rounded-[20px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)] flex flex-col sm:flex-row"
     >
       <nav
         aria-label="设置分类"
-        className="w-full sm:w-44 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--line-2)] bg-[var(--surface)] p-2.5 sm:p-3 flex flex-row sm:flex-col gap-1 overflow-x-auto"
+        className="w-full sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--line-2)] bg-[var(--sidebar-bg)] p-3 flex flex-row sm:flex-col gap-1 overflow-x-auto"
       >
-        <h2 id="settingsModalTitle" className="hidden sm:block text-sm font-semibold px-2.5 py-1.5 m-0">
+        <h2
+          id="settingsModalTitle"
+          className="hidden sm:block text-base leading-[24px] font-semibold text-[var(--text)] px-3 pt-1.5 pb-2.5 m-0"
+        >
           设置
         </h2>
         {NAV_TABS.map((it) => {
@@ -383,13 +403,13 @@ export function SettingsModal() {
               key={it.id}
               type="button"
               onClick={() => setTab(it.id)}
-              className={`rounded-lg px-2.5 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer transition-colors shrink-0 ${
+              className={`h-9 rounded-[10px] px-3 text-sm leading-[22px] flex items-center gap-2.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
                 active
-                  ? "bg-[var(--fill-2)] text-[var(--text)]"
-                  : "text-[var(--text-2)] hover:bg-[var(--fill)]"
+                  ? "bg-[var(--fill-hover)] text-[var(--text)] font-medium"
+                  : "text-[var(--text-2)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
               }`}
             >
-              <Icon className="w-3.5 h-3.5 shrink-0" />
+              <Icon className={`w-4 h-4 shrink-0 ${active ? "text-[var(--text)]" : "text-[var(--muted)]"}`} />
               <span>{it.label}</span>
             </button>
           );
@@ -397,26 +417,30 @@ export function SettingsModal() {
       </nav>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="h-12 px-5 border-b border-[var(--line-2)] flex items-center justify-between shrink-0">
-          <span className="text-sm font-semibold">{NAV_TABS.find((t) => t.id === tab)?.label}</span>
+        <div className="h-14 px-6 border-b border-[var(--line-2)] flex items-center justify-between gap-3 shrink-0">
+          <span className="text-base leading-[24px] font-semibold text-[var(--text)] whitespace-nowrap truncate">
+            {NAV_TABS.find((t) => t.id === tab)?.label}
+          </span>
           <button
             type="button"
             onClick={() => setOpen(false)}
             aria-label="关闭设置"
-            className="btn-ghost rounded-lg w-7 h-7 flex items-center justify-center cursor-pointer"
+            className="btn-ghost rounded-[8px] w-8 h-8 flex items-center justify-center shrink-0 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 text-sm leading-[22px] text-[var(--text)]">
           {tab === "llm" && (
             <>
               {localLlm?.script && (
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-3 flex items-center justify-between gap-2">
-                  <div>
-                    <div className="font-semibold">本机离线大模型服务</div>
-                    <div className="text-[var(--muted)] mt-0.5 num">
+                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)] p-4 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm leading-[22px] font-semibold text-[var(--text)]">
+                      本机离线大模型服务
+                    </div>
+                    <div className="text-[13px] leading-[20px] text-[var(--text-2)] mt-0.5 num">
                       {localLlm.running ? `运行中 · ${localLlm.url}` : "未启动（生成纪要时会自动拉起）"}
                     </div>
                   </div>
@@ -430,43 +454,44 @@ export function SettingsModal() {
                         .then(() => loadSection("llm"))
                         .catch((e) => pushToast(String(e), 4000));
                     }}
-                    className="btn-secondary rounded-lg px-3 py-1.5 text-xs cursor-pointer"
+                    className={BTN_SECONDARY_SM}
                   >
                     {localLlm.running ? "停止" : "启动"}
                   </button>
                 </div>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {providers.map((p, idx) => {
                   const testRes = testResults[p.id];
                   const advOpen = Boolean(advLlmOpen[p.id]);
                   return (
                     <div
                       key={`${p.id}-${idx}`}
-                      className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3.5 space-y-2.5"
+                      className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 space-y-3.5"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <label className="inline-flex items-center gap-2 font-semibold cursor-pointer">
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="inline-flex items-center gap-2.5 min-w-0 text-sm leading-[22px] font-semibold text-[var(--text)] cursor-pointer">
                           <input
                             type="radio"
                             name="activeProvRadio"
                             checked={activeId === p.id}
                             onChange={() => setActiveId(p.id)}
+                            className="accent-[var(--ink)] w-4 h-4 shrink-0 cursor-pointer"
                           />
-                          <span>{p.name || "未命名接口"}</span>
+                          <span className="truncate">{p.name || "未命名接口"}</span>
                           {activeId === p.id && (
-                            <span className="rounded bg-[var(--fill-2)] px-1.5 py-0.5 text-[10.5px]">
+                            <span className="rounded-full bg-[var(--fill)] text-[var(--text-2)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0">
                               当前默认
                             </span>
                           )}
                         </label>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
                             disabled={testingIdx === idx}
                             onClick={() => void testProvider(p, idx)}
-                            className="btn-secondary rounded-lg px-2.5 py-1 text-[11px] cursor-pointer"
+                            className={BTN_BRAND_SOFT}
                           >
                             {testingIdx === idx ? "测试中…" : "测试连接"}
                           </button>
@@ -491,9 +516,9 @@ export function SettingsModal() {
                                 });
                               }}
                               aria-label={`删除 ${p.name}`}
-                              className="btn-ghost btn-danger rounded-lg p-1 cursor-pointer"
+                              className="btn-ghost btn-danger rounded-[8px] w-8 h-8 flex items-center justify-center shrink-0 cursor-pointer"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           )}
                         </div>
@@ -501,22 +526,19 @@ export function SettingsModal() {
 
                       {testRes && (
                         <div
-                          className={`text-[11px] rounded px-2.5 py-1.5 ${
+                          className={`text-[13px] leading-[20px] rounded-[8px] px-3 py-2 ${
                             testRes.ok
-                              ? "bg-[var(--green-weak)] text-[var(--green)]"
-                              : "bg-[var(--red-weak)] text-[var(--red)]"
+                              ? "bg-[var(--ok-soft)] text-[var(--ok)]"
+                              : "bg-[var(--danger-soft)] text-[var(--danger)]"
                           }`}
                         >
                           {testRes.text}
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                         <div>
-                          <label
-                            htmlFor={`prov-name-${idx}`}
-                            className="block text-[11px] text-[var(--muted)] mb-1"
-                          >
+                          <label htmlFor={`prov-name-${idx}`} className={FIELD_LABEL}>
                             显示名称
                           </label>
                           <input
@@ -529,14 +551,11 @@ export function SettingsModal() {
                               )
                             }
                             aria-label="接口名称"
-                            className="w-full px-2.5 py-1 text-xs"
+                            className={`w-full ${FIELD_INPUT}`}
                           />
                         </div>
                         <div>
-                          <label
-                            htmlFor={`prov-model-${idx}`}
-                            className="block text-[11px] text-[var(--muted)] mb-1"
-                          >
+                          <label htmlFor={`prov-model-${idx}`} className={FIELD_LABEL}>
                             模型名称
                           </label>
                           <input
@@ -549,15 +568,15 @@ export function SettingsModal() {
                               )
                             }
                             aria-label="模型标识"
-                            className="w-full px-2.5 py-1 text-xs font-mono"
+                            className={`w-full ${FIELD_INPUT} font-mono`}
                           />
                         </div>
                         <div className="sm:col-span-2">
-                          <label
-                            htmlFor={`prov-url-${idx}`}
-                            className="block text-[11px] text-[var(--muted)] mb-1"
-                          >
-                            接口地址（OpenAI 兼容地址）
+                          <label htmlFor={`prov-url-${idx}`} className={FIELD_LABEL}>
+                            接口地址{" "}
+                            <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                              （OpenAI 兼容地址）
+                            </span>
                           </label>
                           <input
                             id={`prov-url-${idx}`}
@@ -576,20 +595,19 @@ export function SettingsModal() {
                               );
                             }}
                             aria-label="Base URL"
-                            className="w-full px-2.5 py-1 text-xs font-mono"
+                            className={`w-full ${FIELD_INPUT} font-mono`}
                           />
                         </div>
                         <div className="sm:col-span-2">
-                          <label
-                            htmlFor={`prov-key-${idx}`}
-                            className="block text-[11px] text-[var(--muted)] mb-1"
-                          >
-                            API 密钥{" "}
-                            {p.api_key_masked
-                              ? `（当前：${p.api_key_masked}，留空保留）`
-                              : p.api_key_from_env
-                                ? "（已从环境变量读取）"
-                                : ""}
+                          <label htmlFor={`prov-key-${idx}`} className={FIELD_LABEL}>
+                            API 密钥
+                            {(p.api_key_masked || p.api_key_from_env) && (
+                              <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                                {p.api_key_masked
+                                  ? `（当前：${p.api_key_masked}，留空保留）`
+                                  : "（已从环境变量读取）"}
+                              </span>
+                            )}
                           </label>
                           <input
                             id={`prov-key-${idx}`}
@@ -602,7 +620,7 @@ export function SettingsModal() {
                             }
                             placeholder={p.api_key_masked ? "留空保持原密钥不变" : "sk-..."}
                             aria-label="API Key"
-                            className="w-full px-2.5 py-1 text-xs font-mono"
+                            className={`w-full ${FIELD_INPUT} font-mono`}
                           />
                         </div>
                       </div>
@@ -612,18 +630,15 @@ export function SettingsModal() {
                           type="button"
                           onClick={() => setAdvLlmOpen((m) => ({ ...m, [p.id]: !advOpen }))}
                           aria-expanded={advOpen}
-                          className="btn-ghost rounded px-1.5 py-0.5 text-[11px] text-[var(--muted)] inline-flex items-center gap-1 cursor-pointer"
+                          className="btn-ghost rounded-[8px] h-7 px-2 text-xs leading-[18px] text-[var(--muted)] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
                         >
                           <span>高级参数</span>
                           <ChevronDown
-                            className={`w-3 h-3 transition-transform duration-200 ${advOpen ? "rotate-180" : ""}`}
+                            className={`w-3.5 h-3.5 transition-transform duration-200 ${advOpen ? "rotate-180" : ""}`}
                           />
                         </button>
-                        <Disclosure open={advOpen} contentClassName="pt-2">
-                          <label
-                            htmlFor={`prov-max-${idx}`}
-                            className="block text-[11px] text-[var(--muted)] mb-1"
-                          >
+                        <Disclosure open={advOpen} contentClassName="pt-2.5">
+                          <label htmlFor={`prov-max-${idx}`} className={FIELD_LABEL}>
                             单次最大发送字数
                           </label>
                           <input
@@ -639,7 +654,7 @@ export function SettingsModal() {
                               )
                             }
                             aria-label="输入字符上限"
-                            className="w-44 px-2.5 py-1 text-xs font-mono num"
+                            className={`w-48 ${FIELD_INPUT} font-mono num`}
                           />
                         </Disclosure>
                       </div>
@@ -648,28 +663,11 @@ export function SettingsModal() {
                 })}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <div className="space-y-3 pt-2">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setProviders((prev) => [
-                        ...prev,
-                        {
-                          id: `custom_${Date.now()}`,
-                          name: "自定义接口",
-                          base_url: "https://api.openai.com/v1",
-                          model: "gpt-4o-mini",
-                          max_input_chars: 60000,
-                          extra_body: {},
-                          api_key_input: "",
-                        },
-                      ])
-                    }
-                    className="btn-secondary rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> 添加接口
-                  </button>
+                  <span className="text-xs leading-[18px] text-[var(--muted)] whitespace-nowrap shrink-0 mr-0.5">
+                    快速模板：
+                  </span>
                   {LLM_PRESETS.map((preset) => (
                     <button
                       key={preset.name}
@@ -688,51 +686,76 @@ export function SettingsModal() {
                           },
                         ])
                       }
-                      className="btn-ghost rounded-lg px-2 py-1 text-[11px] text-[var(--muted)] cursor-pointer"
+                      className="btn-ghost rounded-[8px] h-7 px-2.5 text-xs leading-[18px] text-[var(--text-2)] hover:text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       +{preset.name}
                     </button>
                   ))}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-[var(--line-2)]">
                   <button
                     type="button"
-                    onClick={() => {
-                      void api("/api/settings/restore-providers", { method: "POST" })
-                        .then(() => {
-                          pushToast("已补回缺失的默认接口模板", { tone: "success" });
-                          return loadSection("llm");
-                        })
-                        .catch((e) => pushToast(String(e), 4000));
-                    }}
-                    className="btn-ghost rounded-lg px-2.5 py-1.5 text-xs cursor-pointer"
+                    onClick={() =>
+                      setProviders((prev) => [
+                        ...prev,
+                        {
+                          id: `custom_${Date.now()}`,
+                          name: "自定义接口",
+                          base_url: "https://api.openai.com/v1",
+                          model: "gpt-4o-mini",
+                          max_input_chars: 60000,
+                          extra_body: {},
+                          api_key_input: "",
+                        },
+                      ])
+                    }
+                    className={BTN_SECONDARY_MD}
                   >
-                    补回默认
+                    <Plus className="w-4 h-4 shrink-0" /> 添加接口
                   </button>
-                  <button
-                    type="button"
-                    disabled={llmSaving}
-                    onClick={() => void saveLlmSettings()}
-                    className="btn-primary rounded-lg px-4 py-1.5 text-xs cursor-pointer"
-                  >
-                    {llmSaving ? "保存中…" : "保存 AI 配置"}
-                  </button>
+                  <div className="flex items-center gap-2 ml-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void api("/api/settings/restore-providers", { method: "POST" })
+                          .then(() => {
+                            pushToast("已补回缺失的默认接口模板", { tone: "success" });
+                            return loadSection("llm");
+                          })
+                          .catch((e) => pushToast(String(e), 4000));
+                      }}
+                      className="btn-ghost rounded-[10px] h-9 px-3 text-sm leading-[22px] whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      补回默认
+                    </button>
+                    <button
+                      type="button"
+                      disabled={llmSaving}
+                      onClick={() => void saveLlmSettings()}
+                      className={BTN_BRAND}
+                    >
+                      {llmSaving ? "保存中…" : "保存 AI 配置"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </>
           )}
 
           {tab === "asr" && asr && (
-            <div className="space-y-4 max-w-lg">
+            <div className="space-y-5 max-w-xl">
               <div>
-                <label htmlFor="asrModelSel" className="block font-medium mb-1">
-                  语音识别引擎（切换后自动生效）
+                <label htmlFor="asrModelSel" className={FIELD_LABEL}>
+                  语音识别引擎{" "}
+                  <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                    （切换后自动生效）
+                  </span>
                 </label>
                 <select
                   id="asrModelSel"
                   value={asr.model}
                   onChange={(e) => void saveAsrImmediate({ ...asr, model: e.target.value })}
-                  className="w-full px-3 py-2 text-xs"
+                  className={`w-full ${FIELD_INPUT}`}
                 >
                   {Object.entries(asr.options).map(([k, lbl]) => (
                     <option key={k} value={k}>
@@ -743,14 +766,14 @@ export function SettingsModal() {
               </div>
 
               <div>
-                <label htmlFor="asrDiarSel" className="block font-medium mb-1">
+                <label htmlFor="asrDiarSel" className={FIELD_LABEL}>
                   说话人区分方式
                 </label>
                 <select
                   id="asrDiarSel"
                   value={asr.diarizer}
                   onChange={(e) => void saveAsrImmediate({ ...asr, diarizer: e.target.value })}
-                  className="w-full px-3 py-2 text-xs"
+                  className={`w-full ${FIELD_INPUT}`}
                 >
                   {Object.entries(asr.diarizers).map(([k, lbl]) => (
                     <option key={k} value={k}>
@@ -761,7 +784,7 @@ export function SettingsModal() {
               </div>
 
               {isDoubaoSelected && (
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label className="flex items-center gap-2.5 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={asr.doubao_ddc}
@@ -772,12 +795,12 @@ export function SettingsModal() {
               )}
 
               {asr.nano_error && (
-                <div className="rounded-lg bg-[var(--red-weak)] text-[var(--red)] p-2.5">
+                <div className="rounded-[10px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px]">
                   语音识别模型状态异常：{asr.nano_error}
                 </div>
               )}
 
-              <div className="flex items-center gap-2 pt-2">
+              <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -785,22 +808,25 @@ export function SettingsModal() {
                       pushToast("已开始重新加载本机识别模型", { tone: "success" }),
                     );
                   }}
-                  className="btn-secondary rounded-lg px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  className={BTN_SECONDARY_MD}
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> 重新加载识别模型
+                  <RefreshCw className="w-4 h-4" /> 重新加载识别模型
                 </button>
               </div>
             </div>
           )}
 
           {tab === "vocab" && (
-            <div className="space-y-5">
-              <div className="space-y-3">
+            <div className="space-y-6">
+              <div className="space-y-5">
                 <div>
-                  <label htmlFor="vocabHotInp" className="block font-medium mb-1">
-                    常用热词（人名、项目代号、专有缩写，空格或逗号分隔）
+                  <label htmlFor="vocabHotInp" className={FIELD_LABEL}>
+                    常用热词
                   </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
+                  <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0 mb-2">
+                    人名、项目代号、专有缩写，使用空格或逗号分隔。
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2.5">
                     <textarea
                       id="vocabHotInp"
                       value={vocab.hotwords}
@@ -808,21 +834,28 @@ export function SettingsModal() {
                       onBlur={() => void saveVocab(vocab, true)}
                       rows={2}
                       placeholder="例如：张伟 季度复盘 OKR"
-                      className="flex-1 p-2.5 text-xs"
+                      className={`flex-1 ${FIELD_TEXTAREA}`}
                     />
                     <button
                       type="button"
                       disabled={vocabSaving}
                       onClick={() => void saveVocab()}
-                      className="btn-secondary rounded-lg px-3 py-1.5 text-xs self-end cursor-pointer shrink-0"
+                      className={`${BTN_BRAND} self-end shrink-0`}
                     >
                       {vocabSaving ? "保存中…" : "保存热词"}
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <div className="font-medium">自动纠错词表（改动后立即生效）</div>
+                <div className="space-y-2.5">
+                  <div>
+                    <div className="text-sm leading-[22px] font-medium text-[var(--text)]">
+                      自动纠错词表{" "}
+                      <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                        （改动后立即生效）
+                      </span>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -830,7 +863,7 @@ export function SettingsModal() {
                       onChange={(e) => setNewFixFrom(e.target.value)}
                       placeholder="易听错词"
                       aria-label="错误词"
-                      className="flex-1 px-2.5 py-1.5 text-xs"
+                      className={`flex-1 ${FIELD_INPUT}`}
                     />
                     <span className="text-[var(--muted)]">→</span>
                     <input
@@ -839,7 +872,7 @@ export function SettingsModal() {
                       onChange={(e) => setNewFixTo(e.target.value)}
                       placeholder="正确写法"
                       aria-label="正确词"
-                      className="flex-1 px-2.5 py-1.5 text-xs"
+                      className={`flex-1 ${FIELD_INPUT}`}
                     />
                     <button
                       type="button"
@@ -852,23 +885,26 @@ export function SettingsModal() {
                         setNewFixTo("");
                         void saveVocab(next);
                       }}
-                      className="btn-secondary rounded-lg px-3 py-1.5 text-xs cursor-pointer"
+                      className={`${BTN_SECONDARY_MD} shrink-0`}
                     >
                       添加
                     </button>
                   </div>
 
-                  <div className="max-h-44 overflow-y-auto divide-y divide-[var(--line-2)] border border-[var(--line)] rounded-xl">
+                  <div className="max-h-52 overflow-y-auto divide-y divide-[var(--line-2)] border border-[var(--line)] rounded-[12px] bg-[var(--surface)]">
                     {!vocab.fixes.length ? (
-                      <div className="p-4 text-center text-[var(--muted)]">暂无纠错规则</div>
+                      <div className="p-5 text-center text-[13px] leading-[20px] text-[var(--muted)]">
+                        暂无纠错规则
+                      </div>
                     ) : (
                       vocab.fixes.map((f, idx) => (
                         <div
                           key={`${f.from}-${idx}`}
-                          className="px-3 py-2 flex items-center justify-between gap-2"
+                          className="px-3.5 py-2.5 flex items-center justify-between gap-2 text-sm leading-[22px]"
                         >
                           <span>
-                            <span className="text-[var(--muted)]">{f.from}</span> → <b>{f.to}</b>
+                            <span className="text-[var(--text-2)]">{f.from}</span> →{" "}
+                            <span className="font-semibold text-[var(--text)]">{f.to}</span>
                           </span>
                           <button
                             type="button"
@@ -886,7 +922,7 @@ export function SettingsModal() {
                               });
                             }}
                             aria-label={`删除规则 ${f.from}`}
-                            className="btn-ghost btn-danger rounded p-1 cursor-pointer"
+                            className="btn-ghost btn-danger rounded-[6px] w-7 h-7 flex items-center justify-center shrink-0 cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -898,9 +934,9 @@ export function SettingsModal() {
               </div>
 
               {rsi && (
-                <div className="space-y-4 pt-3 border-t border-[var(--line-2)]">
-                  <div className="flex flex-wrap gap-4 rounded-xl border border-[var(--line)] p-3.5">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                <div className="space-y-5 pt-5 border-t border-[var(--line-2)]">
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3.5 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4">
+                    <label className="flex items-center gap-2.5 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={!rsi.config.paused}
@@ -914,7 +950,7 @@ export function SettingsModal() {
                       <span>根据改名与纠错记录持续优化识别</span>
                     </label>
 
-                    <label className="flex items-center gap-2 cursor-pointer">
+                    <label className="flex items-center gap-2.5 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={Boolean(rsi.config.auto_name)}
@@ -929,9 +965,9 @@ export function SettingsModal() {
                     </label>
                   </div>
 
-                  <section className="space-y-2">
+                  <section className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold">
+                      <div className="text-[15px] leading-[22px] font-semibold text-[var(--text)] num">
                         已建立的声纹档案（{rsi.voiceprints?.persons?.length || 0} 人）
                       </div>
                       <button
@@ -940,21 +976,21 @@ export function SettingsModal() {
                           setOpen(false);
                           useAppStore.getState().setVpWizardOpen(true);
                         }}
-                        className="btn-secondary rounded-lg px-2.5 h-7 text-xs cursor-pointer"
+                        className={BTN_BRAND_SOFT}
                       >
                         批量认人
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {(rsi.voiceprints?.persons || []).length === 0 ? (
-                        <span className="text-[var(--muted)]">
+                        <span className="text-[13px] leading-[20px] text-[var(--text-2)]">
                           暂无已入库声纹，给会议说话人改名后会自动建立
                         </span>
                       ) : (
                         (rsi.voiceprints?.persons || []).map((p) => (
                           <span
                             key={p.name}
-                            className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface)] px-3 py-1"
+                            className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--surface)] px-3 py-1 text-[13px] leading-[20px] text-[var(--text)] num"
                           >
                             <span>
                               {p.name} · {p.sessions ?? 0} 场 · {fmtDur(p.voiced_s ?? 0)}
@@ -970,7 +1006,7 @@ export function SettingsModal() {
                                 });
                               }}
                               aria-label={`删除声纹 ${p.name}`}
-                              className="text-[var(--muted)] hover:text-[var(--red)] cursor-pointer"
+                              className="text-[var(--muted)] hover:text-[var(--danger)] transition-colors cursor-pointer"
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
@@ -981,18 +1017,22 @@ export function SettingsModal() {
                   </section>
 
                   {(rsi.vocab?.candidates?.length || 0) > 0 && (
-                    <section className="space-y-2">
-                      <div className="font-semibold">发现的候选纠错词</div>
-                      <div className="space-y-1.5">
+                    <section className="space-y-2.5">
+                      <div className="text-[15px] leading-[22px] font-semibold text-[var(--text)]">
+                        发现的候选纠错词
+                      </div>
+                      <div className="space-y-2">
                         {(rsi.vocab?.candidates || []).map((c) => (
                           <div
                             key={`${c.from}-${c.to}`}
-                            className="rounded-xl border border-[var(--line)] px-3 py-2 flex items-center justify-between gap-2"
+                            className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] px-3.5 py-2.5 flex items-center justify-between gap-3 text-sm leading-[22px]"
                           >
-                            <span>
-                              {c.from} → <b>{c.to}</b>（{c.count ?? 1} 次）
+                            <span className="num">
+                              <span className="text-[var(--text-2)]">{c.from}</span> →{" "}
+                              <span className="font-semibold text-[var(--text)]">{c.to}</span>（{c.count ?? 1}{" "}
+                              次）
                             </span>
-                            <div className="flex gap-1.5">
+                            <div className="flex items-center gap-1.5 shrink-0">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1001,7 +1041,7 @@ export function SettingsModal() {
                                     body: { from: c.from, to: c.to, hotword: true },
                                   }).then(() => loadSection("vocab"));
                                 }}
-                                className="btn-secondary rounded px-2 py-0.5 text-[11px] cursor-pointer"
+                                className="h-7 rounded-[8px] px-2.5 text-xs leading-[18px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                               >
                                 采纳规则
                               </button>
@@ -1013,7 +1053,7 @@ export function SettingsModal() {
                                     body: { from: c.from, to: c.to },
                                   }).then(() => loadSection("vocab"));
                                 }}
-                                className="btn-ghost rounded px-2 py-0.5 text-[11px] cursor-pointer"
+                                className="btn-ghost h-7 rounded-[8px] px-2.5 text-xs leading-[18px] whitespace-nowrap shrink-0 cursor-pointer"
                               >
                                 忽略
                               </button>
@@ -1029,19 +1069,21 @@ export function SettingsModal() {
                       type="button"
                       onClick={() => setAdvRsiOpen((v) => !v)}
                       aria-expanded={advRsiOpen}
-                      className="btn-ghost rounded px-1.5 py-0.5 text-[11px] text-[var(--muted)] inline-flex items-center gap-1 cursor-pointer"
+                      className="btn-ghost rounded-[8px] h-7 px-2 text-xs leading-[18px] text-[var(--muted)] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <span>数据清理与重置</span>
                       <ChevronDown
-                        className={`w-3 h-3 transition-transform duration-200 ${advRsiOpen ? "rotate-180" : ""}`}
+                        className={`w-3.5 h-3.5 transition-transform duration-200 ${advRsiOpen ? "rotate-180" : ""}`}
                       />
                     </button>
-                    <Disclosure open={advRsiOpen} contentClassName="pt-2">
-                      <div className="flex items-center justify-between rounded-xl border border-[var(--line)] p-3">
-                        <span className="text-[var(--muted)]">清空本机所有已学习的声纹档案与词库习惯</span>
+                    <Disclosure open={advRsiOpen} contentClassName="pt-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)] p-3.5">
+                        <span className="text-[13px] leading-[20px] text-[var(--text-2)]">
+                          清空本机所有已学习的声纹档案与词库习惯
+                        </span>
                         <InlineConfirm
                           triggerLabel="重置全部学习数据"
-                          triggerClassName="btn-secondary btn-danger rounded-lg px-3 py-1.5 text-xs"
+                          triggerClassName="btn-secondary btn-danger rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0"
                           message="确定清空所有声纹档案、识别阈值和词库学习记录吗？此操作无法撤销。"
                           confirmLabel="确认清空"
                           onConfirm={async () => {
@@ -1059,9 +1101,9 @@ export function SettingsModal() {
           )}
 
           {tab === "ambient" && ambCfg && (
-            <div className="space-y-4 max-w-xl">
+            <div className="space-y-5 max-w-2xl">
               {rsi?.ambient?.advice?.warning && (
-                <div className="rounded-xl bg-[var(--amber-weak)] text-[var(--amber)] p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="rounded-[12px] bg-[var(--warn-soft)] text-[var(--warn)] p-3.5 flex flex-wrap items-center justify-between gap-3 text-[13px] leading-[20px]">
                   <span>
                     {rsi.ambient.advice.warning}
                     {rsi.ambient.advice.reason ? `（${rsi.ambient.advice.reason}）` : ""}
@@ -1075,7 +1117,7 @@ export function SettingsModal() {
                         setAmbCfg((cur) => (cur ? { ...cur, min_speech_s: suggested } : cur));
                         pushToast(`已将最短保留时长设为 ${suggested} 秒，点击保存生效`);
                       }}
-                      className="btn-secondary rounded-lg px-2.5 py-1 text-[11px] cursor-pointer"
+                      className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       采用建议
                     </button>
@@ -1084,22 +1126,22 @@ export function SettingsModal() {
               )}
 
               {storage && (
-                <div className="rounded-xl bg-[var(--surface-muted)] p-3 text-[11.5px] text-[var(--text-2)] num">
+                <div className="rounded-[12px] bg-[var(--surface-2)] px-4 py-3 text-[13px] leading-[20px] text-[var(--text-2)] num">
                   过去 {storage.days} 天日均空间：跳过静音约 {storage.skip_h_day} 小时/天（
                   {storage.skip_mb_day} MB/天）
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="ambDevSel" className="block font-medium mb-1">
+                  <label htmlFor="ambDevSel" className={FIELD_LABEL}>
                     监听麦克风设备
                   </label>
                   <select
                     id="ambDevSel"
                     value={ambCfg.device}
                     onChange={(e) => setAmbCfg({ ...ambCfg, device: e.target.value })}
-                    className="w-full px-2.5 py-1.5 text-xs"
+                    className={`w-full ${FIELD_INPUT}`}
                   >
                     <option value="">系统默认输入</option>
                     {devices.map((d) => (
@@ -1111,14 +1153,14 @@ export function SettingsModal() {
                 </div>
 
                 <div>
-                  <label htmlFor="ambSensSel" className="block font-medium mb-1">
+                  <label htmlFor="ambSensSel" className={FIELD_LABEL}>
                     收音灵敏度
                   </label>
                   <select
                     id="ambSensSel"
                     value={ambCfg.sensitivity}
                     onChange={(e) => setAmbCfg({ ...ambCfg, sensitivity: e.target.value })}
-                    className="w-full px-2.5 py-1.5 text-xs"
+                    className={`w-full ${FIELD_INPUT}`}
                   >
                     <option value="normal">标准（嘈杂办公环境，优先防误触）</option>
                     <option value="high">高（安静房间，远场小声也拾音）</option>
@@ -1127,8 +1169,9 @@ export function SettingsModal() {
                 </div>
 
                 <div>
-                  <label htmlFor="ambSplitMin" className="block font-medium mb-1">
-                    静音多久后自动分段（分钟）
+                  <label htmlFor="ambSplitMin" className={FIELD_LABEL}>
+                    静音多久后自动分段{" "}
+                    <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">（分钟）</span>
                   </label>
                   <input
                     id="ambSplitMin"
@@ -1137,13 +1180,14 @@ export function SettingsModal() {
                     max={60}
                     value={ambCfg.split_min}
                     onChange={(e) => setAmbCfg({ ...ambCfg, split_min: Number(e.target.value) || 5 })}
-                    className="w-full px-2.5 py-1.5 text-xs num"
+                    className={`w-full ${FIELD_INPUT} num`}
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="ambMinSpk" className="block font-medium mb-1">
-                    最短保留讲话时长（秒）
+                  <label htmlFor="ambMinSpk" className={FIELD_LABEL}>
+                    最短保留讲话时长{" "}
+                    <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">（秒）</span>
                   </label>
                   <input
                     id="ambMinSpk"
@@ -1152,13 +1196,16 @@ export function SettingsModal() {
                     max={600}
                     value={ambCfg.min_speech_s}
                     onChange={(e) => setAmbCfg({ ...ambCfg, min_speech_s: Number(e.target.value) || 0 })}
-                    className="w-full px-2.5 py-1.5 text-xs num"
+                    className={`w-full ${FIELD_INPUT} num`}
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="ambKeepDays" className="block font-medium mb-1">
-                    全天录音保留天数（0 = 永久）
+                  <label htmlFor="ambKeepDays" className={FIELD_LABEL}>
+                    全天录音保留天数{" "}
+                    <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                      （0 = 永久）
+                    </span>
                   </label>
                   <input
                     id="ambKeepDays"
@@ -1170,28 +1217,28 @@ export function SettingsModal() {
                       setPurgePreviewCount(null);
                       setAmbCfg({ ...ambCfg, audio_keep_days: Number(e.target.value) || 0 });
                     }}
-                    className="w-full px-2.5 py-1.5 text-xs num"
+                    className={`w-full ${FIELD_INPUT} num`}
                   />
                 </div>
 
                 <div>
-                  <label htmlFor="ambSumTime" className="block font-medium mb-1">
+                  <label htmlFor="ambSumTime" className={FIELD_LABEL}>
                     每日自动日报时间
                   </label>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
                     <input
                       id="ambSumTime"
                       type="time"
                       value={ambCfg.summary_time}
                       onChange={(e) => setAmbCfg({ ...ambCfg, summary_time: e.target.value })}
-                      className="flex-1 px-2.5 py-1 text-xs font-mono num"
+                      className={`flex-1 ${FIELD_INPUT} font-mono num`}
                     />
                     {ambCfg.summary_time && (
                       <button
                         type="button"
                         onClick={() => setAmbCfg({ ...ambCfg, summary_time: "" })}
                         aria-label="关闭每日自动日报"
-                        className="btn-ghost rounded px-2 py-1 text-[11px] cursor-pointer"
+                        className="btn-ghost rounded-[8px] h-9 px-2.5 text-xs leading-[18px] whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         关闭
                       </button>
@@ -1200,8 +1247,8 @@ export function SettingsModal() {
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="flex items-center gap-2 cursor-pointer">
+              <div className="space-y-2.5">
+                <label className="flex items-center gap-2.5 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={ambCfg.keep_awake}
@@ -1209,7 +1256,7 @@ export function SettingsModal() {
                   />
                   <span>开启全天模式时阻止电脑自动休眠</span>
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label className="flex items-center gap-2.5 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={ambCfg.keep_silence}
@@ -1220,23 +1267,23 @@ export function SettingsModal() {
               </div>
 
               {purgePreviewCount !== null && purgePreviewCount > 0 && (
-                <div className="rounded-xl bg-[var(--red-weak)] text-[var(--red)] p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <span>
+                <div className="rounded-[12px] bg-[var(--danger-soft)] text-[var(--danger)] p-3.5 flex flex-wrap items-center justify-between gap-3 text-[13px] leading-[20px]">
+                  <span className="num">
                     缩短保留天数后，将清理 {purgePreviewCount} 条早于 {ambCfg.audio_keep_days}{" "}
                     天前的音频文件（转写与纪要保留）。
                   </span>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 ml-auto shrink-0">
                     <button
                       type="button"
                       onClick={() => setPurgePreviewCount(null)}
-                      className="btn-secondary rounded-lg px-2.5 py-1 text-xs cursor-pointer"
+                      className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       取消
                     </button>
                     <button
                       type="button"
                       onClick={() => void saveAmbient(true)}
-                      className="rounded-lg px-2.5 py-1 text-xs font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white cursor-pointer"
+                      className="rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium bg-[var(--danger)] hover:opacity-90 text-white whitespace-nowrap shrink-0 cursor-pointer transition-opacity"
                     >
                       确认清理并保存
                     </button>
@@ -1244,12 +1291,12 @@ export function SettingsModal() {
                 </div>
               )}
 
-              <div className="flex justify-end">
+              <div className="flex justify-end pt-1">
                 <button
                   type="button"
                   disabled={ambSaving}
                   onClick={() => void saveAmbient(false)}
-                  className="btn-primary rounded-lg px-4 py-1.5 text-xs cursor-pointer"
+                  className={BTN_BRAND}
                 >
                   {ambSaving ? "保存中…" : "保存全天模式设置"}
                 </button>
@@ -1258,10 +1305,12 @@ export function SettingsModal() {
           )}
 
           {tab === "lan" && lan && (
-            <div className="space-y-4 max-w-xl">
-              <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-3.5 space-y-2.5">
-                <label className="flex items-center justify-between cursor-pointer">
-                  <span className="font-semibold">允许同一 Wi-Fi 下手机 / iPad 访问</span>
+            <div className="space-y-5 max-w-2xl">
+              <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)] p-4 space-y-4">
+                <label className="flex items-center justify-between gap-3 cursor-pointer">
+                  <span className="text-sm leading-[22px] font-semibold text-[var(--text)]">
+                    允许同一 Wi-Fi 下手机 / iPad 访问
+                  </span>
                   <input
                     type="checkbox"
                     checked={lanEnabled}
@@ -1272,22 +1321,28 @@ export function SettingsModal() {
                     }}
                   />
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   <div>
-                    <label htmlFor="lanPortInp" className="block text-[11px] text-[var(--muted)] mb-1">
-                      HTTPS 端口（默认 8771）
+                    <label htmlFor="lanPortInp" className={FIELD_LABEL}>
+                      HTTPS 端口{" "}
+                      <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                        （默认 8771）
+                      </span>
                     </label>
                     <input
                       id="lanPortInp"
                       type="number"
                       value={lanPort}
                       onChange={(e) => setLanPort(e.target.value)}
-                      className="w-full px-2.5 py-1 text-xs num"
+                      className={`w-full ${FIELD_INPUT} font-mono num`}
                     />
                   </div>
                   <div>
-                    <label htmlFor="lanPwInp" className="block text-[11px] text-[var(--muted)] mb-1">
-                      访问口令 {lan.has_password ? "（已设，留空不改）" : "（留空将自动生成 6 位口令）"}
+                    <label htmlFor="lanPwInp" className={FIELD_LABEL}>
+                      访问口令{" "}
+                      <span className="text-xs leading-[18px] font-normal text-[var(--muted)]">
+                        {lan.has_password ? "（已设，留空不改）" : "（留空自动生成 6 位口令）"}
+                      </span>
                     </label>
                     <input
                       id="lanPwInp"
@@ -1295,16 +1350,16 @@ export function SettingsModal() {
                       value={lanPw}
                       onChange={(e) => setLanPw(e.target.value)}
                       placeholder={lan.has_password ? "留空保持原口令" : "可选：输入 6 位以上口令"}
-                      className="w-full px-2.5 py-1 text-xs"
+                      className={`w-full ${FIELD_INPUT}`}
                     />
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-[var(--muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <span className="text-xs leading-[18px] text-[var(--muted)]">
                     {lan.running ? "服务运行中" : "未启动"}
                     {lan.error ? ` · ${lan.error}` : ""}
                   </span>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2 ml-auto shrink-0">
                     {lan.running && (
                       <button
                         type="button"
@@ -1313,7 +1368,7 @@ export function SettingsModal() {
                             pushToast("已下线所有手机/平板登录态"),
                           );
                         }}
-                        className="btn-secondary rounded-lg px-2.5 py-1 text-xs cursor-pointer"
+                        className={BTN_SECONDARY_MD}
                       >
                         踢出已登录设备
                       </button>
@@ -1322,7 +1377,7 @@ export function SettingsModal() {
                       type="button"
                       disabled={lanSaving}
                       onClick={() => void saveLan()}
-                      className="btn-primary rounded-lg px-3 py-1 text-xs cursor-pointer"
+                      className={BTN_BRAND}
                     >
                       {lanSaving ? "应用中…" : "保存并应用"}
                     </button>
@@ -1330,10 +1385,10 @@ export function SettingsModal() {
                 </div>
 
                 {generatedPin && (
-                  <div className="rounded-lg bg-[var(--green-weak)] text-[var(--green)] px-3 py-2 flex items-center justify-between gap-2 text-xs">
+                  <div className="rounded-[10px] bg-[var(--ok-soft)] text-[var(--ok)] px-3.5 py-2.5 flex items-center justify-between gap-3 text-[13px] leading-[20px]">
                     <span>
                       已自动生成一次性显示访问口令：
-                      <strong className="font-mono num text-sm">{generatedPin}</strong>
+                      <strong className="font-mono num text-sm font-semibold">{generatedPin}</strong>
                     </span>
                     <CopyButton text={generatedPin} label="复制口令" successToast="已复制访问口令" />
                   </div>
@@ -1341,20 +1396,22 @@ export function SettingsModal() {
               </div>
 
               {lan.urls.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                   {lan.urls.map((u) => (
                     <div
                       key={u.url}
-                      className="rounded-xl border border-[var(--line)] p-3 flex flex-col items-center text-center gap-2"
+                      className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 flex flex-col items-center text-center gap-2.5"
                     >
                       {u.qr && (
-                        <div className="bg-white p-2 rounded-lg">
+                        <div className="bg-white p-2 rounded-[10px]">
                           <img src={qrDataUri(u.qr)} alt={`${u.label} 二维码`} className="w-28 h-28 block" />
                         </div>
                       )}
-                      <div className="font-mono text-[11px] break-all">{u.url}</div>
+                      <div className="font-mono text-xs leading-[18px] text-[var(--text)] break-all">
+                        {u.url}
+                      </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-[var(--muted)]">{u.label}</span>
+                        <span className="text-xs leading-[18px] text-[var(--muted)]">{u.label}</span>
                         <CopyButton text={u.url} label="复制地址" />
                       </div>
                     </div>
@@ -1363,17 +1420,19 @@ export function SettingsModal() {
               )}
 
               {lan.ca_sha256 && (
-                <div className="rounded-xl border border-[var(--line)] p-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="font-medium">iPhone / iPad 证书描述文件</div>
-                    <div className="text-[11px] text-[var(--muted)] font-mono truncate max-w-xs">
+                    <div className="text-sm leading-[22px] font-medium text-[var(--text)]">
+                      iPhone / iPad 证书描述文件
+                    </div>
+                    <div className="text-xs leading-[18px] text-[var(--muted)] font-mono truncate max-w-xs mt-0.5">
                       SHA-256: {lan.ca_sha256}
                     </div>
                   </div>
                   <a
                     href="/lan/ca.cer"
                     download="meeting-notes-ca.cer"
-                    className="btn-secondary rounded-lg px-3 py-1.5 text-xs no-underline shrink-0"
+                    className={`${BTN_SECONDARY_SM} no-underline shrink-0`}
                   >
                     下载 CA 证书
                   </a>
@@ -1381,21 +1440,21 @@ export function SettingsModal() {
               )}
 
               {mcp && (
-                <div className="pt-2 border-t border-[var(--line-2)] space-y-2">
+                <div className="pt-3 border-t border-[var(--line-2)] space-y-2.5">
                   <button
                     type="button"
                     onClick={() => setMcpOpen((v) => !v)}
                     aria-expanded={mcpOpen}
-                    className="btn-ghost rounded px-1.5 py-0.5 text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                    className="btn-ghost rounded-[8px] h-8 px-2.5 text-sm leading-[22px] font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <span>AI 桌面客户端接入 (MCP)</span>
                     <ChevronDown
-                      className={`w-3.5 h-3.5 transition-transform duration-200 ${mcpOpen ? "rotate-180" : ""}`}
+                      className={`w-4 h-4 transition-transform duration-200 ${mcpOpen ? "rotate-180" : ""}`}
                     />
                   </button>
 
                   <Disclosure open={mcpOpen} contentClassName="space-y-3 pt-1">
-                    <p className="text-xs text-[var(--muted)] m-0">
+                    <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0">
                       在 Claude Desktop、Cursor 等桌面助手里填入下面这段配置，即可直接检索和引用本机会议记录。
                     </p>
                     <div className="relative">
@@ -1405,7 +1464,7 @@ export function SettingsModal() {
                         successToast="已复制 MCP 配置 JSON"
                         className="absolute right-3 top-3"
                       />
-                      <pre className="rounded-xl bg-[var(--surface-muted)] border border-[var(--line)] p-3.5 pr-24 text-xs font-mono overflow-x-auto m-0">
+                      <pre className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] p-4 pr-24 text-xs leading-[18px] font-mono text-[var(--text-body)] overflow-x-auto m-0">
                         {JSON.stringify(mcp.config, null, 2)}
                       </pre>
                     </div>
@@ -1413,7 +1472,7 @@ export function SettingsModal() {
                       {mcp.tools.map((t) => (
                         <code
                           key={t}
-                          className="rounded-md bg-[var(--fill)] px-2 py-0.5 text-[11px] font-mono"
+                          className="rounded-[6px] bg-[var(--fill)] px-2 py-0.5 text-xs leading-[18px] font-mono text-[var(--text-2)]"
                         >
                           {t}
                         </code>
@@ -1427,12 +1486,12 @@ export function SettingsModal() {
 
           {tab === "about" && (
             <div className="space-y-4">
-              <div className="rounded-xl border border-[var(--line)] p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="text-[15px] font-semibold text-[var(--text)]">
+                  <div className="text-base leading-[24px] font-semibold text-[var(--text)]">
                     会议记录（Meeting Notes）
                   </div>
-                  <div className="text-xs text-[var(--muted)] mt-1 num">
+                  <div className="text-[13px] leading-[20px] text-[var(--text-2)] mt-1 num">
                     版本 v{updateStatus?.currentVersion || desktopInfo?.version || "0.1.0"} ·{" "}
                     {desktopInfo
                       ? `${desktopInfo.platform}/${desktopInfo.arch}`
@@ -1453,7 +1512,7 @@ export function SettingsModal() {
                       window.open("https://github.com/MrDgbot/meeting-notes/releases", "_blank");
                     }
                   }}
-                  className="btn-secondary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  className={BTN_SECONDARY_SM}
                 >
                   <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>查看全部版本与日志</span>
@@ -1461,11 +1520,11 @@ export function SettingsModal() {
               </div>
 
               {window.desktopAPI && (
-                <div className="rounded-xl border border-[var(--line)] p-4 space-y-3">
+                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-4 space-y-3.5">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-[13.5px] font-medium">软件更新</div>
-                      <div className="text-xs text-[var(--muted)] mt-0.5">
+                      <div className="text-sm leading-[22px] font-semibold text-[var(--text)]">软件更新</div>
+                      <div className="text-[13px] leading-[20px] text-[var(--text-2)] mt-0.5">
                         {updateStatus?.status === "downloaded"
                           ? `新版本 v${updateStatus.info?.version ?? ""} 已下载完成，重启即可安装`
                           : updateStatus?.status === "available"
@@ -1489,7 +1548,7 @@ export function SettingsModal() {
                           updateStatus?.status === "checking" || updateStatus?.status === "downloading"
                         }
                         onClick={() => void window.desktopAPI?.checkForUpdates()}
-                        className="btn-secondary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                        className={`${BTN_SECONDARY_SM} disabled:opacity-60`}
                       >
                         <RefreshCw
                           className={`w-3.5 h-3.5 ${updateStatus?.status === "checking" ? "animate-spin" : ""}`}
@@ -1502,7 +1561,7 @@ export function SettingsModal() {
                         <button
                           type="button"
                           onClick={() => void window.desktopAPI?.downloadUpdate()}
-                          className="btn-primary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                          className={BTN_BRAND_SM}
                         >
                           <Download className="w-3.5 h-3.5" aria-hidden="true" />
                           <span>{updateStatus.canAutoInstall ? "立即下载更新" : "前往下载新版"}</span>
@@ -1513,7 +1572,7 @@ export function SettingsModal() {
                         <button
                           type="button"
                           onClick={() => void window.desktopAPI?.installUpdate()}
-                          className="btn-primary rounded-lg px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                          className={BTN_BRAND_SM}
                         >
                           <span>重启并安装更新</span>
                         </button>
@@ -1522,14 +1581,14 @@ export function SettingsModal() {
                   </div>
 
                   {updateStatus?.status === "downloading" && updateStatus.progress && (
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                       <div className="w-full h-2 rounded-full bg-[var(--fill)] overflow-hidden">
                         <div
                           className="h-full rounded-full bg-[var(--ink)] transition-[width] duration-200"
                           style={{ width: `${updateStatus.progress.percent}%` }}
                         />
                       </div>
-                      <div className="flex items-center justify-between text-[11px] text-[var(--muted)] num">
+                      <div className="flex items-center justify-between text-xs leading-[18px] text-[var(--muted)] num">
                         <span>{updateStatus.progress.percent}%</span>
                         <span>
                           {Math.max(0, Math.round(updateStatus.progress.bytesPerSecond / 1024))} KB/s
@@ -1539,25 +1598,27 @@ export function SettingsModal() {
                   )}
 
                   {updateStatus?.status === "error" && updateStatus.error && (
-                    <div className="rounded-lg bg-[var(--red-weak)] text-[var(--red)] px-3 py-2 text-xs break-words">
+                    <div className="rounded-[10px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px] break-words">
                       {updateStatus.error}
                     </div>
                   )}
 
                   {updateStatus?.info?.releaseNotes && (
-                    <div className="rounded-xl bg-[var(--surface-muted)] border border-[var(--line-2)] p-3 max-h-48 overflow-y-auto text-xs leading-relaxed whitespace-pre-wrap text-[var(--text-body)]">
+                    <div className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line-2)] p-3.5 max-h-48 overflow-y-auto text-[13px] leading-[20px] whitespace-pre-wrap text-[var(--text-body)]">
                       {updateStatus.info.releaseNotes}
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between pt-2 border-t border-[var(--line-2)] text-xs">
+                  <div className="flex items-center justify-between gap-4 pt-3 border-t border-[var(--line-2)]">
                     <div>
-                      <div className="font-medium">启动时自动检查更新</div>
-                      <div className="text-[var(--muted)] text-[11.5px]">
+                      <div className="text-sm leading-[22px] font-medium text-[var(--text)]">
+                        启动时自动检查更新
+                      </div>
+                      <div className="text-[13px] leading-[20px] text-[var(--text-2)] mt-0.5">
                         有新版本时在侧栏与托盘轻提示，不会在录音或转写过程中强行重启
                       </div>
                     </div>
-                    <label className="ios-switch" aria-label="启动时自动检查更新">
+                    <label className="ios-switch shrink-0" aria-label="启动时自动检查更新">
                       <input
                         type="checkbox"
                         checked={updateStatus?.autoCheck ?? true}
@@ -1571,7 +1632,7 @@ export function SettingsModal() {
                 </div>
               )}
 
-              <div className="rounded-xl bg-[var(--surface-muted)] p-3.5 text-xs text-[var(--muted)] space-y-1 leading-relaxed">
+              <div className="rounded-[12px] bg-[var(--surface-2)] p-4 text-[13px] leading-[20px] text-[var(--text-2)] space-y-1.5">
                 <div>· 录音、VAD、FunASR / pyannote 声纹与实时转写均在本机完成，音频默认不上传云端。</div>
                 <div>· 开源协议：GNU AGPL-3.0-or-later · GitHub: MrDgbot/meeting-notes</div>
               </div>

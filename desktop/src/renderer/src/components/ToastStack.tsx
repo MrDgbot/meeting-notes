@@ -29,16 +29,16 @@ export function ToastStack() {
           className="mn-toast-slot pointer-events-auto"
         >
           <div>
-            <div className="flex items-center gap-2 rounded-[10px] bg-[var(--ink)] text-[var(--ink-inv)] pl-3.5 pr-2 py-2 text-[13px] shadow-[var(--shadow-pop)]">
+            <div className="flex items-center gap-2 rounded-[10px] bg-[var(--ink)] text-[var(--ink-fg)] pl-3.5 pr-2 py-2 text-[13px] leading-[20px] shadow-[var(--shadow-3)]">
               {t.tone !== "default" && (
                 <span
                   aria-hidden="true"
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    t.tone === "success" ? "bg-emerald-400" : "bg-rose-400"
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    t.tone === "success" ? "bg-[var(--ok)]" : "bg-[var(--danger)]"
                   }`}
                 />
               )}
-              <span className="flex-1 leading-snug">{t.msg}</span>
+              <span className="flex-1 leading-[20px]">{t.msg}</span>
               {t.action && (
                 <button
                   type="button"
@@ -65,7 +65,7 @@ export function ToastStack() {
                       });
                     }
                   }}
-                  className="rounded-[6px] px-2 py-0.5 text-xs font-medium bg-[var(--ink-inv)]/15 hover:bg-[var(--ink-inv)]/25 transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-wait"
+                  className="rounded-[6px] px-2 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap bg-[var(--ink-fg)]/15 hover:bg-[var(--ink-fg)]/25 transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-wait"
                 >
                   {busyIds[t.id] ? "处理中…" : t.action.label}
                 </button>
@@ -74,7 +74,7 @@ export function ToastStack() {
                 type="button"
                 onClick={() => dismissToast(t.id)}
                 aria-label="关闭提示"
-                className="w-6 h-6 rounded-[6px] inline-flex items-center justify-center opacity-75 hover:opacity-100 hover:bg-[var(--ink-inv)]/15 transition-colors cursor-pointer shrink-0"
+                className="w-6 h-6 rounded-[6px] inline-flex items-center justify-center opacity-75 hover:opacity-100 hover:bg-[var(--ink-fg)]/15 transition-colors cursor-pointer shrink-0"
               >
                 <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>

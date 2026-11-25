@@ -166,7 +166,7 @@ export function applyDocumentTheme(mode: ThemeMode): ResolvedTheme {
   document.documentElement.dataset.themeMode = mode;
   document.documentElement.style.colorScheme = resolved;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", resolved === "dark" ? "#141414" : "#f5f5f5");
+  if (meta) meta.setAttribute("content", resolved === "dark" ? "#1F1F1F" : "#FCFCFC");
   return resolved;
 }
 

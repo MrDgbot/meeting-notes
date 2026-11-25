@@ -249,12 +249,12 @@ export function PeoplePage({ personName }: { personName?: string }) {
       label="修改人物姓名"
       maxWidthClass="max-w-md"
     >
-      <form onSubmit={(e) => void submitRename(e)} className="p-5 space-y-4">
-        <div className="flex items-center justify-between gap-2">
+      <form onSubmit={(e) => void submitRename(e)} className="p-6 space-y-4">
+        <div className="flex items-start justify-between gap-2">
           <div>
-            <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">修改或合并人物</h2>
-            <p className="text-xs text-[var(--muted)] mt-0.5 m-0">
-              当前人物：<b className="text-[var(--text)]">{renameTarget}</b>
+            <h2 className="text-base leading-[24px] font-semibold text-[var(--text)] m-0">修改或合并人物</h2>
+            <p className="text-[13px] leading-[20px] text-[var(--text-2)] mt-1 m-0">
+              当前人物：<span className="font-semibold text-[var(--text)]">{renameTarget}</span>
             </p>
           </div>
           <button
@@ -262,14 +262,17 @@ export function PeoplePage({ personName }: { personName?: string }) {
             disabled={renameBusy}
             onClick={() => setRenameTarget(null)}
             aria-label="关闭修改人物弹窗"
-            className="btn-ghost rounded-[7px] w-[28px] h-[28px] flex items-center justify-center cursor-pointer"
+            className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="personRenameInput" className="block text-xs font-medium text-[var(--text-2)]">
+          <label
+            htmlFor="personRenameInput"
+            className="block text-[13px] leading-[20px] font-medium text-[var(--text-2)]"
+          >
             改为新姓名（输入已有人物名会自动合并两人的会议与声纹）
           </label>
           <input
@@ -279,59 +282,61 @@ export function PeoplePage({ personName }: { personName?: string }) {
             value={renameInput}
             onChange={(e) => setRenameInput(e.target.value)}
             placeholder="输入正确姓名…"
-            className="w-full h-9 px-3 text-[13px]"
+            className="w-full h-9 px-3 rounded-[10px] text-sm leading-[22px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
           />
           {isMergeTarget && (
-            <div className="rounded-[8px] bg-[var(--amber-weak)] text-[var(--amber)] px-3 py-1.5 text-xs">
+            <div className="rounded-[10px] bg-[var(--warn-soft)] text-[var(--warn)] px-3.5 py-2 text-[13px] leading-[20px]">
               将把「{renameTarget}」的全部会议记录与声纹合并到「{trimmedRename}」
             </div>
           )}
         </div>
 
         {otherPeople.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="text-[11.5px] text-[var(--muted)]">快速合并到已有人物：</div>
+          <div className="space-y-2">
+            <div className="text-xs leading-[18px] text-[var(--muted)]">快速合并到已有人物：</div>
             <div className="flex flex-wrap gap-1.5">
               {otherPeople.slice(0, 8).map((p) => (
                 <button
                   key={p.name}
                   type="button"
                   onClick={() => setRenameInput(p.name)}
-                  className={`rounded-full px-2.5 h-[28px] text-xs inline-flex items-center gap-1 cursor-pointer transition-colors ${
-                    trimmedRename === p.name ? "btn-primary" : "btn-secondary"
+                  className={`rounded-full px-3 h-7 text-xs leading-[18px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    trimmedRename === p.name
+                      ? "bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)]"
+                      : "btn-secondary"
                   }`}
                 >
                   <span>{p.name}</span>
-                  <span className="opacity-70 num">{p.meetings}场</span>
+                  <span className="opacity-75 num">{p.meetings}场</span>
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        <label className="flex items-start gap-2 text-xs text-[var(--text-2)] cursor-pointer select-none">
+        <label className="flex items-start gap-2.5 text-[13px] leading-[20px] text-[var(--text-2)] cursor-pointer select-none">
           <input
             type="checkbox"
             checked={renameMinutes}
             onChange={(e) => setRenameMinutes(e.target.checked)}
-            className="mt-0.5"
+            className="mt-0.5 shrink-0"
           />
           <span>同时把已生成纪要正文里的「{renameTarget}」替换为新姓名</span>
         </label>
 
-        <div className="flex items-center justify-end gap-2 pt-1">
+        <div className="flex items-center justify-end gap-2 pt-2">
           <button
             type="button"
             disabled={renameBusy}
             onClick={() => setRenameTarget(null)}
-            className="btn-ghost rounded-[8px] h-8 px-3 text-xs cursor-pointer"
+            className="btn-ghost rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
           >
             取消
           </button>
           <button
             type="submit"
             disabled={renameBusy || !trimmedRename || trimmedRename === renameTarget}
-            className="btn-primary rounded-[8px] h-8 px-3.5 text-xs font-medium cursor-pointer disabled:opacity-50"
+            className="rounded-[8px] h-8 px-4 text-[13px] leading-[20px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 disabled:opacity-45"
           >
             {renameBusy ? "处理中…" : isMergeTarget ? "确认合并" : "保存改名"}
           </button>
@@ -349,11 +354,13 @@ export function PeoplePage({ personName }: { personName?: string }) {
       label="修改单场发言人"
       maxWidthClass="max-w-md"
     >
-      <div className="p-5 space-y-4">
-        <div className="flex items-center justify-between gap-2">
+      <div className="p-6 space-y-4">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">修改本场认错的发言人</h2>
-            <p className="text-xs text-[var(--muted)] mt-0.5 m-0 truncate">
+            <h2 className="text-base leading-[24px] font-semibold text-[var(--text)] m-0">
+              修改本场认错的发言人
+            </h2>
+            <p className="text-[13px] leading-[20px] text-[var(--text-2)] mt-1 m-0 truncate">
               {reassignTarget?.title || "未命名会议"}
             </p>
           </div>
@@ -362,14 +369,17 @@ export function PeoplePage({ personName }: { personName?: string }) {
             disabled={reassignBusy}
             onClick={() => setReassignTarget(null)}
             aria-label="关闭单场改人弹窗"
-            className="btn-ghost rounded-[7px] w-[28px] h-[28px] flex items-center justify-center cursor-pointer shrink-0"
+            className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer shrink-0"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="reassignInput" className="block text-xs font-medium text-[var(--text-2)]">
+          <label
+            htmlFor="reassignInput"
+            className="block text-[13px] leading-[20px] font-medium text-[var(--text-2)]"
+          >
             在这场会议里，「{personName}」实际上是谁？
           </label>
           <input
@@ -385,21 +395,23 @@ export function PeoplePage({ personName }: { personName?: string }) {
               }
             }}
             placeholder="输入正确姓名，或点下方「恢复为未命名」…"
-            className="w-full h-9 px-3 text-[13px]"
+            className="w-full h-9 px-3 rounded-[10px] text-sm leading-[22px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
           />
         </div>
 
         {otherPeople.length > 0 && (
-          <div className="space-y-1.5">
-            <div className="text-[11.5px] text-[var(--muted)]">改为其他已有人物：</div>
+          <div className="space-y-2">
+            <div className="text-xs leading-[18px] text-[var(--muted)]">改为其他已有人物：</div>
             <div className="flex flex-wrap gap-1.5">
               {otherPeople.slice(0, 8).map((p) => (
                 <button
                   key={p.name}
                   type="button"
                   onClick={() => setReassignInput(p.name)}
-                  className={`rounded-full px-2.5 h-[28px] text-xs inline-flex items-center gap-1 cursor-pointer transition-colors ${
-                    reassignInput.trim() === p.name ? "btn-primary" : "btn-secondary"
+                  className={`rounded-full px-3 h-7 text-xs leading-[18px] font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                    reassignInput.trim() === p.name
+                      ? "bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)]"
+                      : "btn-secondary"
                   }`}
                 >
                   <span>{p.name}</span>
@@ -410,23 +422,23 @@ export function PeoplePage({ personName }: { personName?: string }) {
         )}
 
         {reassignTarget?.has_minutes && reassignInput.trim() && (
-          <label className="flex items-start gap-2 text-xs text-[var(--text-2)] cursor-pointer select-none">
+          <label className="flex items-start gap-2.5 text-[13px] leading-[20px] text-[var(--text-2)] cursor-pointer select-none">
             <input
               type="checkbox"
               checked={reassignMinutes}
               onChange={(e) => setReassignMinutes(e.target.checked)}
-              className="mt-0.5"
+              className="mt-0.5 shrink-0"
             />
             <span>同时把本场纪要里的「{personName}」替换为新姓名</span>
           </label>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
           <button
             type="button"
             disabled={reassignBusy}
             onClick={() => void submitReassign("")}
-            className="btn-ghost btn-danger rounded-[8px] h-8 px-2.5 text-xs cursor-pointer"
+            className="btn-ghost btn-danger rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
           >
             恢复为未命名
           </button>
@@ -435,7 +447,7 @@ export function PeoplePage({ personName }: { personName?: string }) {
               type="button"
               disabled={reassignBusy}
               onClick={() => setReassignTarget(null)}
-              className="btn-ghost rounded-[8px] h-8 px-3 text-xs cursor-pointer"
+              className="btn-ghost rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
             >
               取消
             </button>
@@ -443,7 +455,7 @@ export function PeoplePage({ personName }: { personName?: string }) {
               type="button"
               disabled={reassignBusy || !reassignInput.trim() || reassignInput.trim() === personName}
               onClick={() => void submitReassign(reassignInput)}
-              className="btn-primary rounded-[8px] h-8 px-3.5 text-xs font-medium cursor-pointer disabled:opacity-50"
+              className="rounded-[8px] h-8 px-4 text-[13px] leading-[20px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 disabled:opacity-45"
             >
               {reassignBusy ? "保存中…" : "确认修改"}
             </button>
@@ -456,25 +468,28 @@ export function PeoplePage({ personName }: { personName?: string }) {
   if (personName) {
     const vpSessions = timeline?.voiceprint_sessions ?? 0;
     return (
-      <div className="max-w-[960px] mx-auto px-5 sm:px-8 py-6 space-y-5">
+      <div className="max-w-[960px] mx-auto px-7 sm:px-9 py-7 space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => navigate("#/people")}
-              className="btn-ghost rounded-[8px] px-2.5 h-[28px] text-xs inline-flex items-center gap-1 cursor-pointer shrink-0"
+              className="btn-ghost rounded-[8px] px-2.5 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" /> 人物管理
+              <ArrowLeft className="w-4 h-4" aria-hidden="true" />
+              <span>人物管理</span>
             </button>
-            <span className="w-10 h-10 rounded-full bg-[var(--ink)] text-[var(--ink-inv)] inline-flex items-center justify-center font-semibold text-base shrink-0">
+            <span className="w-10 h-10 rounded-full bg-[var(--ink)] text-[var(--ink-fg)] inline-flex items-center justify-center font-semibold text-base shrink-0">
               {personName.slice(0, 1)}
             </span>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-[22px] font-semibold m-0 truncate">{personName}</h1>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 truncate">
+                  {personName}
+                </h1>
                 {vpSessions > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--green-weak)] text-[var(--green)] px-2 py-0.5 text-[11px] font-medium num">
-                    <UserCheck className="w-3 h-3" aria-hidden="true" />
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--ok-soft)] text-[var(--ok)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 num">
+                    <UserCheck className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                     已建声纹（{vpSessions} 场）
                   </span>
                 )}
@@ -483,20 +498,20 @@ export function PeoplePage({ personName }: { personName?: string }) {
           </div>
 
           {timeline && timeline.total_meetings > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => openRenameModal(personName)}
-                className="btn-secondary rounded-[8px] h-[28px] px-3 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                className="btn-secondary rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Pencil className="w-3 h-3" aria-hidden="true" />
+                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>改名 / 合并</span>
               </button>
               {vpSessions > 0 && (
                 <InlineConfirm
                   triggerLabel="清除声纹"
                   triggerAriaLabel={`清除声纹：${personName}`}
-                  triggerClassName="btn-ghost rounded-[8px] h-[28px] px-2.5 text-xs"
+                  triggerClassName="btn-ghost rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0"
                   message={`清除「${personName}」的声纹记忆档案？会保留所有历史会议里的名字，后续需要重新学习声纹。`}
                   confirmLabel="确认清除"
                   danger
@@ -506,7 +521,7 @@ export function PeoplePage({ personName }: { personName?: string }) {
               <InlineConfirm
                 triggerLabel="清除命名"
                 triggerAriaLabel={`清除命名：${personName}`}
-                triggerClassName="btn-ghost btn-danger rounded-[8px] h-[28px] px-2.5 text-xs"
+                triggerClassName="btn-ghost btn-danger rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0"
                 message={`确定把所有会议里的「${personName}」恢复为未命名说话人并删除其声纹档案吗？会议内容与转写文字不会丢失。`}
                 confirmLabel="确认清除"
                 danger
@@ -517,42 +532,48 @@ export function PeoplePage({ personName }: { personName?: string }) {
         </div>
 
         {loading ? (
-          <div className="card-surface p-5">
+          <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-6">
             <SkeletonLines lines={5} />
           </div>
         ) : !timeline ? (
-          <div className="card-surface py-12 text-center text-sm text-[var(--muted)]">
+          <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] py-14 text-center text-sm leading-[22px] text-[var(--muted)]">
             未找到「{personName}」的会议记录
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="card-surface p-4">
-                <div className="text-xs text-[var(--muted)]">参与会议</div>
-                <div className="text-lg font-semibold mt-1 num">{timeline.total_meetings} 场</div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-4">
+                <div className="text-xs leading-[18px] text-[var(--muted)]">参与会议</div>
+                <div className="text-[20px] leading-[28px] font-semibold tracking-[-0.01em] text-[var(--text)] mt-1 num">
+                  {timeline.total_meetings} 场
+                </div>
               </div>
-              <div className="card-surface p-4">
-                <div className="text-xs text-[var(--muted)]">累计发言</div>
-                <div className="text-lg font-semibold mt-1 num">{fmtDur(timeline.total_s)}</div>
+              <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-4">
+                <div className="text-xs leading-[18px] text-[var(--muted)]">累计发言</div>
+                <div className="text-[20px] leading-[28px] font-semibold tracking-[-0.01em] text-[var(--text)] mt-1 num">
+                  {fmtDur(timeline.total_s)}
+                </div>
               </div>
-              <div className="card-surface p-4">
-                <div className="text-xs text-[var(--muted)]">未完待办</div>
-                <div className="text-lg font-semibold mt-1 num">
+              <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-4">
+                <div className="text-xs leading-[18px] text-[var(--muted)]">未完待办</div>
+                <div className="text-[20px] leading-[28px] font-semibold tracking-[-0.01em] text-[var(--text)] mt-1 num">
                   {timeline.todos.filter((t) => !t.done).length} 项
                 </div>
               </div>
             </div>
 
             {timeline.co_speakers.length > 0 && (
-              <section className="card-surface p-4 space-y-2">
-                <h2 className="text-sm font-semibold m-0">常一起开会</h2>
-                <div className="flex flex-wrap gap-1.5">
+              <section className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 space-y-3">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0">
+                  常一起开会
+                </h2>
+                <div className="flex flex-wrap gap-2">
                   {timeline.co_speakers.map((co) => (
                     <button
                       key={co.name}
                       type="button"
                       onClick={() => navigate(`#/people/${encodeURIComponent(co.name)}`)}
-                      className="btn-secondary rounded-full px-3 h-[28px] text-xs num cursor-pointer"
+                      className="btn-secondary rounded-full px-3 h-7 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 num cursor-pointer"
                     >
                       {co.name} · {co.count} 场
                     </button>
@@ -562,13 +583,13 @@ export function PeoplePage({ personName }: { personName?: string }) {
             )}
 
             {timeline.top_terms.length > 0 && (
-              <section className="card-surface p-4 space-y-2">
-                <h2 className="text-sm font-semibold m-0">高频话题</h2>
-                <div className="flex flex-wrap gap-1.5">
+              <section className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 space-y-3">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0">高频话题</h2>
+                <div className="flex flex-wrap gap-2">
                   {timeline.top_terms.map((term) => (
                     <span
                       key={term}
-                      className="rounded-full bg-[var(--fill)] px-2.5 py-0.5 text-xs text-[var(--text-2)]"
+                      className="rounded-full bg-[var(--fill)] px-3 py-0.5 text-xs leading-[18px] text-[var(--text-2)] whitespace-nowrap"
                     >
                       {term}
                     </span>
@@ -578,23 +599,23 @@ export function PeoplePage({ personName }: { personName?: string }) {
             )}
 
             {timeline.todos.length > 0 && (
-              <section className="card-surface p-4 space-y-2">
-                <h2 className="text-sm font-semibold m-0">相关待办</h2>
+              <section className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 space-y-3">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0">相关待办</h2>
                 <div className="space-y-1.5">
                   {timeline.todos.map((t) => (
                     <label
                       key={`${t.mid}-${t.idx}`}
-                      className="flex items-start gap-2.5 text-sm py-1 cursor-pointer"
+                      className="flex items-start gap-2.5 text-sm leading-[22px] py-1 cursor-pointer"
                     >
                       <input
                         type="checkbox"
                         checked={t.done}
                         onChange={(e) => void togglePersonTodo(t, e.target.checked)}
-                        className="mt-1"
+                        className="mt-[3px] shrink-0"
                       />
                       <span
                         className={`transition-colors duration-150 ${
-                          t.done ? "line-through text-[var(--muted)]" : ""
+                          t.done ? "line-through text-[var(--muted)]" : "text-[var(--text)]"
                         }`}
                       >
                         {t.text}
@@ -605,26 +626,35 @@ export function PeoplePage({ personName }: { personName?: string }) {
               </section>
             )}
 
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold m-0">参会时间线</h2>
-                <span className="text-xs text-[var(--muted)]">某场认错了人？点右侧「改人」可单独修正</span>
+            <section className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                  参会时间线
+                </h2>
+                <span className="text-xs leading-[18px] text-[var(--muted)]">
+                  某场认错了人？点右侧「改人」可单独修正
+                </span>
               </div>
               {timeline.meetings.map((m) => (
-                <div key={m.id} className="card-surface p-3.5 flex items-center justify-between gap-3">
+                <div
+                  key={m.id}
+                  className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-3.5 flex items-center justify-between gap-3"
+                >
                   <button
                     type="button"
                     onClick={() => navigate(`#/m/${m.id}`)}
                     className="flex-1 min-w-0 text-left hover:opacity-80 cursor-pointer transition-opacity"
                   >
-                    <div className="text-sm font-medium truncate">{m.title || "未命名会议"}</div>
-                    <div className="text-xs text-[var(--muted)] mt-0.5 num">
+                    <div className="text-sm leading-[22px] font-medium text-[var(--text)] truncate">
+                      {m.title || "未命名会议"}
+                    </div>
+                    <div className="text-xs leading-[18px] text-[var(--muted)] mt-0.5 num">
                       {(m.created || "").slice(0, 10)} · 总长 {fmtDur(m.duration)} · 发言 {fmtDur(m.spoken_s)}
                     </div>
                   </button>
                   <div className="flex items-center gap-2 shrink-0">
                     {m.has_minutes && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-[var(--fill)] text-[var(--text-2)]">
+                      <span className="text-xs leading-[18px] font-medium px-2 py-0.5 rounded-[6px] bg-[var(--fill)] text-[var(--text-2)] whitespace-nowrap shrink-0">
                         有纪要
                       </span>
                     )}
@@ -633,9 +663,9 @@ export function PeoplePage({ personName }: { personName?: string }) {
                       onClick={() => openReassignModal(m)}
                       aria-label={`改人：${m.title || "未命名会议"}`}
                       title="修改本场发言人"
-                      className="btn-secondary rounded-[7px] h-[28px] px-2.5 text-xs inline-flex items-center gap-1 cursor-pointer"
+                      className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      <Users className="w-3 h-3" aria-hidden="true" />
+                      <Users className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>改人</span>
                     </button>
                   </div>
@@ -652,27 +682,29 @@ export function PeoplePage({ personName }: { personName?: string }) {
   }
 
   return (
-    <div className="max-w-[960px] mx-auto px-5 sm:px-8 py-6 space-y-5">
+    <div className="max-w-[960px] mx-auto px-7 sm:px-9 py-7 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-[24px] font-semibold tracking-[-0.01em] m-0">人物管理</h1>
-          <p className="text-[13.5px] text-[var(--muted)] m-0 mt-1">
+          <h1 className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 whitespace-nowrap">
+            人物管理
+          </h1>
+          <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0 mt-1">
             点击人物查看参会记录，可直接改名、合并重复人物或纠正单场认错
           </p>
         </div>
         <button
           type="button"
           onClick={() => setVpWizardOpen(true)}
-          className="btn-secondary h-9 px-3.5 rounded-lg text-xs inline-flex items-center gap-1.5 cursor-pointer"
+          className="h-9 px-4 rounded-[10px] text-sm leading-[22px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 active:scale-[0.98]"
         >
-          <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+          <Sparkles className="w-4 h-4" aria-hidden="true" />
           <span>批量认人</span>
         </button>
       </div>
 
       <div className="relative max-w-sm">
         <Search
-          className="w-3.5 h-3.5 text-[var(--muted)] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+          className="w-4 h-4 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
           aria-hidden="true"
         />
         <input
@@ -681,34 +713,34 @@ export function PeoplePage({ personName }: { personName?: string }) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder="搜索发言人姓名…"
           aria-label="搜索发言人"
-          className="w-full pl-8 pr-8 py-1.5 text-[13px]"
+          className="w-full h-9 pl-9 pr-9 rounded-[10px] text-sm leading-[22px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
         />
         {search && (
           <button
             type="button"
             onClick={() => setSearch("")}
             aria-label="清空搜索"
-            className="absolute right-1 top-1/2 -translate-y-1/2 w-[26px] h-[26px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 inline-flex items-center justify-center rounded-[6px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--fill)] cursor-pointer transition-colors"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         )}
       </div>
 
       {loading ? (
-        <div className="card-surface p-5">
+        <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-6">
           <SkeletonLines lines={5} />
         </div>
       ) : !filteredPeople.length ? (
-        <div className="card-surface py-12 text-center text-sm text-[var(--muted)]">
+        <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] py-14 text-center text-sm leading-[22px] text-[var(--muted)]">
           暂无已命名的发言人，可在转写稿中为说话人命名后汇总于此
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {filteredPeople.map((p) => (
             <div
               key={p.name}
-              className="card-surface p-4 space-y-3 hover:shadow-[var(--shadow-2)] transition-shadow"
+              className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-4 flex flex-col justify-between gap-3 hover:shadow-[var(--shadow-2)] transition-shadow"
             >
               <div className="flex items-center gap-2.5">
                 <button
@@ -716,12 +748,14 @@ export function PeoplePage({ personName }: { personName?: string }) {
                   onClick={() => navigate(`#/people/${encodeURIComponent(p.name)}`)}
                   className="flex-1 min-w-0 flex items-center gap-3 text-left cursor-pointer"
                 >
-                  <span className="w-[34px] h-[34px] rounded-full bg-[var(--ink)] text-[var(--ink-inv)] inline-flex items-center justify-center font-semibold text-sm shrink-0">
+                  <span className="w-9 h-9 rounded-full bg-[var(--ink)] text-[var(--ink-fg)] inline-flex items-center justify-center font-semibold text-sm shrink-0">
                     {p.name.slice(0, 1)}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[15px] font-semibold truncate text-[var(--text)]">{p.name}</div>
-                    <div className="text-[11.5px] text-[var(--muted)] num">
+                    <div className="text-[15px] leading-[22px] font-semibold truncate text-[var(--text)]">
+                      {p.name}
+                    </div>
+                    <div className="text-xs leading-[18px] text-[var(--muted)] truncate whitespace-nowrap num">
                       最近：{(p.last_seen || "").slice(0, 10) || "-"}
                     </div>
                   </div>
@@ -732,28 +766,30 @@ export function PeoplePage({ personName }: { personName?: string }) {
                   onClick={() => openRenameModal(p.name)}
                   aria-label={`修改 ${p.name}`}
                   title="改名或合并"
-                  className="btn-ghost rounded-[7px] w-[28px] h-[28px] inline-flex items-center justify-center shrink-0 cursor-pointer"
+                  className="btn-ghost rounded-[6px] w-7 h-7 inline-flex items-center justify-center shrink-0 cursor-pointer"
                 >
                   <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
               </div>
 
-              <div className="pt-2 border-t border-[var(--line-2)] flex items-center justify-between gap-2 text-xs text-[var(--muted)] num">
-                <span>
-                  参会 {p.meetings} 场 · 累计发言 {fmtDur(p.total_s)}
+              <div className="pt-2.5 border-t border-[var(--line-2)] flex items-center justify-between gap-2 text-xs leading-[22px] text-[var(--muted)] num">
+                <span className="whitespace-nowrap truncate min-w-0">
+                  {p.meetings} 场 · {fmtDur(p.total_s)}
                 </span>
-                <div className="flex items-center gap-1 shrink-0">
-                  {p.has_voiceprint && (
-                    <span className="rounded-full bg-[var(--green-weak)] text-[var(--green)] px-1.5 py-0 text-[10.5px] font-medium">
-                      声纹
-                    </span>
-                  )}
-                  {p.open_todos > 0 && (
-                    <span className="rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2 py-0 text-[11px] font-medium">
-                      {p.open_todos} 待办
-                    </span>
-                  )}
-                </div>
+                {(p.has_voiceprint || p.open_todos > 0) && (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {p.has_voiceprint && (
+                      <span className="rounded-full bg-[var(--ok-soft)] text-[var(--ok)] px-2 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0">
+                        声纹
+                      </span>
+                    )}
+                    {p.open_todos > 0 && (
+                      <span className="rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0">
+                        {p.open_todos} 待办
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))}

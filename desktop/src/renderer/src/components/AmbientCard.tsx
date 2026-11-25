@@ -69,14 +69,14 @@ export function AmbientCard() {
 
   const dotClass =
     state === "speech"
-      ? "bg-[var(--red)] rec-dot"
+      ? "bg-[var(--danger)] rec-dot"
       : state === "listening" || state === "starting"
-        ? "bg-[var(--green)]"
+        ? "bg-[var(--ok)]"
         : state === "paused" || state === "held"
-          ? "bg-[var(--amber)]"
+          ? "bg-[var(--warn)]"
           : state === "error"
-            ? "bg-[var(--red)]"
-            : "bg-[var(--line)]";
+            ? "bg-[var(--danger)]"
+            : "bg-[var(--line-focus)]";
 
   const meterPct = enabled
     ? Math.max(0, Math.min(100, Math.round(((ambient?.level_db ?? -60) + 60) * 1.8)))
@@ -93,8 +93,10 @@ export function AmbientCard() {
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${dotClass}`} aria-hidden="true" />
-          <span className="text-[13.5px] font-semibold text-[var(--text)] truncate">全天模式</span>
+          <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} aria-hidden="true" />
+          <span className="text-[13px] leading-[20px] font-semibold text-[var(--text)] whitespace-nowrap shrink-0">
+            全天模式
+          </span>
         </div>
 
         <label className="ios-switch" title={enabled ? "关闭全天模式" : "开启全天模式"}>
@@ -104,8 +106,8 @@ export function AmbientCard() {
       </div>
 
       <div
-        className={`mt-1 text-[11.5px] leading-snug num overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,#000_85%,transparent)] ${
-          state === "error" ? "text-[var(--red)]" : "text-[var(--muted)]"
+        className={`mt-1 text-xs leading-[18px] num overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,#000_85%,transparent)] ${
+          state === "error" ? "text-[var(--danger)]" : "text-[var(--muted)]"
         }`}
         title={ambient?.partial || statusText}
       >
@@ -113,16 +115,16 @@ export function AmbientCard() {
       </div>
 
       {enabled && (
-        <div className="mt-2 h-[3px] rounded-full bg-[var(--fill-2)] overflow-hidden" aria-hidden="true">
+        <div className="mt-2 h-[3px] rounded-full bg-[var(--fill-hover)] overflow-hidden" aria-hidden="true">
           <div
-            className="h-full w-full origin-left bg-[var(--green)] transition-transform duration-150"
+            className="h-full w-full origin-left bg-[var(--ok)] transition-transform duration-150"
             style={{ transform: `scaleX(${(meterPct / 100).toFixed(3)})` }}
           />
         </div>
       )}
 
       {ambient?.fallback && (
-        <div className="mt-1.5 text-[11px] text-[var(--amber)] leading-tight">{ambient.fallback}</div>
+        <div className="mt-1.5 text-xs leading-[18px] text-[var(--warn)]">{ambient.fallback}</div>
       )}
 
       {ambient?.conv && (
@@ -130,7 +132,7 @@ export function AmbientCard() {
           <button
             type="button"
             onClick={() => navigate(`#/m/${ambient.conv?.id}`)}
-            className="flex-1 text-left rounded-lg bg-[var(--fill)] hover:bg-[var(--fill-2)] px-2 py-1 text-[11.5px] text-[var(--red)] font-medium truncate num cursor-pointer transition-colors"
+            className="flex-1 text-left rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-2.5 py-1 text-xs leading-[18px] text-[var(--danger)] font-medium truncate num cursor-pointer transition-colors"
           >
             正在记录 · {fmtDur(ambient.conv.dur_s)}
           </button>
@@ -139,7 +141,7 @@ export function AmbientCard() {
               triggerAriaLabel="立即切分当前对话"
               triggerTitle="立即切分保存这段对话"
               triggerIcon={<Scissors className="w-3.5 h-3.5" />}
-              triggerClassName="btn-ghost rounded-lg p-1"
+              triggerClassName="btn-ghost rounded-[6px] w-7 h-7"
               message={`这段只说了 ${Math.round(ambient.conv.voiced_s)} 秒（不足 ${minS} 秒），现在切分不会保留在主列表。确定切分吗？`}
               confirmLabel="切分"
               align="right"
@@ -151,7 +153,7 @@ export function AmbientCard() {
               onClick={() => void runAmbientAction({ action: "split" })}
               title="立即切分保存这段对话"
               aria-label="立即切分当前对话"
-              className="btn-ghost rounded-lg p-1 cursor-pointer"
+              className="btn-ghost rounded-[6px] w-7 h-7 inline-flex items-center justify-center cursor-pointer"
             >
               <Scissors className="w-3.5 h-3.5" />
             </button>
@@ -160,71 +162,71 @@ export function AmbientCard() {
       )}
 
       {enabled && (
-        <div className="mt-1.5 flex items-center justify-between gap-1 text-[11px] text-[var(--muted)]">
-          <span className="num">
+        <div className="mt-2 flex items-center justify-between gap-1 text-xs leading-[18px] text-[var(--muted)]">
+          <span className="num min-w-0 truncate">
             今日 {ambient?.today.count ?? 0} 段 · {fmtDur(ambient?.today.speech_s ?? 0)}
           </span>
           {state === "paused" ? (
             <button
               type="button"
               onClick={() => void runAmbientAction({ action: "resume" })}
-              className="hover:text-[var(--text)] inline-flex items-center gap-0.5 cursor-pointer"
+              className="hover:text-[var(--text)] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              <Play className="w-3 h-3" /> 恢复
+              <Play className="w-3 h-3 shrink-0" /> 恢复
             </button>
           ) : (
             <button
               type="button"
               onClick={() => void runAmbientAction({ action: "pause", minutes: 30 })}
-              className="hover:text-[var(--text)] inline-flex items-center gap-0.5 cursor-pointer"
+              className="hover:text-[var(--text)] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              <Pause className="w-3 h-3" /> 暂停30分
+              <Pause className="w-3 h-3 shrink-0" /> 暂停30分
             </button>
           )}
         </div>
       )}
 
       {(hasDiscardedNotice || showDiscarded) && (
-        <div className="mt-1.5 pt-1.5 border-t border-[var(--line-2)]">
+        <div className="mt-2 pt-2 border-t border-[var(--line-2)]">
           <button
             type="button"
             onClick={() => setShowDiscarded((v) => !v)}
-            className="text-[11px] text-[var(--link)] hover:underline inline-flex items-center gap-1 cursor-pointer"
+            className="text-xs leading-[18px] text-[var(--text-2)] hover:text-[var(--text)] underline-offset-2 hover:underline inline-flex items-center gap-1 whitespace-nowrap cursor-pointer transition-colors"
           >
-            <History className="w-3 h-3" />
+            <History className="w-3.5 h-3.5 shrink-0" />
             {showDiscarded ? "收起待恢复片段" : "有短片段被跳过，点击查看"}
           </button>
         </div>
       )}
 
       <Disclosure open={showDiscarded} contentClassName="pt-2">
-        <div className="rounded-lg bg-[var(--fill)] p-2 space-y-1.5 max-h-48 overflow-y-auto">
-          <div className="flex items-center justify-between text-[11px] font-medium">
-            <span>最近跳过的短对话</span>
+        <div className="rounded-[8px] bg-[var(--surface-2)] p-2.5 space-y-2 max-h-52 overflow-y-auto">
+          <div className="flex items-center justify-between text-xs leading-[18px] font-medium text-[var(--text)]">
+            <span className="whitespace-nowrap">最近跳过的短对话</span>
             <button
               type="button"
               onClick={() => setShowDiscarded(false)}
               aria-label="关闭跳过列表"
-              className="btn-ghost rounded-md w-[26px] h-[26px] inline-flex items-center justify-center cursor-pointer"
+              className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer"
             >
-              <X className="w-3 h-3" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
           {loadingDiscarded ? (
-            <div className="text-[11px] text-[var(--muted)]">加载中…</div>
+            <div className="text-xs leading-[18px] text-[var(--muted)]">加载中…</div>
           ) : !discardedItems.length ? (
-            <div className="text-[11px] text-[var(--muted)]">暂无可恢复的短片段</div>
+            <div className="text-xs leading-[18px] text-[var(--muted)]">暂无可恢复的短片段</div>
           ) : (
             discardedItems.map((it) => (
               <div
                 key={it.id}
-                className="rounded-lg bg-[var(--surface)] shadow-[var(--shadow-1)] p-2 flex items-start justify-between gap-2"
+                className="rounded-[8px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-2 flex items-start justify-between gap-2"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-[11px] text-[var(--muted)] num">
-                    {hm(it.time)} · {Math.round(it.voiced_s)}秒
+                  <div className="text-xs leading-[18px] text-[var(--muted)] num">
+                    <span className="num-mono">{hm(it.time)}</span> · {Math.round(it.voiced_s)}秒
                   </div>
-                  <div className="text-[11px] text-[var(--text-body)] line-clamp-2">
+                  <div className="mt-0.5 text-xs leading-[18px] text-[var(--text-body)] line-clamp-2">
                     {it.text || "（无文字预览）"}
                   </div>
                 </div>
@@ -236,7 +238,7 @@ export function AmbientCard() {
                     );
                     setShowDiscarded(false);
                   }}
-                  className="btn-secondary rounded px-2 py-0.5 text-[11px] shrink-0 cursor-pointer"
+                  className="btn-secondary rounded-[6px] px-2 h-7 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   恢复
                 </button>

@@ -161,10 +161,16 @@ export function AudioPlayer({
 
       const style = getComputedStyle(document.documentElement);
       const dark = resolvedTheme === "dark";
-      const playedColor = style.getPropertyValue("--ink").trim() || (dark ? "#ededed" : "#171717");
+      const playedColor =
+        style.getPropertyValue("--text").trim() ||
+        style.getPropertyValue("--ink").trim() ||
+        (dark ? "rgba(255, 255, 255, 0.9)" : "rgba(20, 20, 20, 0.9)");
       const idleColor =
-        style.getPropertyValue("--line").trim() || (dark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.16)");
-      const markColor = style.getPropertyValue("--amber").trim() || (dark ? "#fbbf24" : "#92400e");
+        style.getPropertyValue("--line-focus").trim() ||
+        style.getPropertyValue("--line").trim() ||
+        (dark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.18)");
+      const markColor =
+        style.getPropertyValue("--warn").trim() || (dark ? "rgba(255, 159, 10, 1)" : "rgba(217, 119, 6, 1)");
 
       const total = Math.max(overrideDur ?? durSecRef.current, 0.1);
       const secVal = overrideSec ?? curSecRef.current;
@@ -182,9 +188,16 @@ export function AudioPlayer({
           const amp = Math.max(0.08, Math.min(1, levels[srcIdx] ?? 0.1));
           const barH = Math.max(3, amp * (rect.height - 4));
           const x = i * step;
+          const y = midY - barH / 2;
           const ratio = (i + 0.5) / bars;
           ctx.fillStyle = ratio <= curRatio ? playedColor : idleColor;
-          ctx.fillRect(x, midY - barH / 2, barW, barH);
+          if (typeof ctx.roundRect === "function" && barW >= 1.4) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, barW, barH, Math.min(barW / 2, 1.5));
+            ctx.fill();
+          } else {
+            ctx.fillRect(x, y, barW, barH);
+          }
         }
       } else {
         ctx.fillStyle = idleColor;
@@ -194,11 +207,14 @@ export function AudioPlayer({
       }
 
       if (peaks?.quiet?.length && skipSilence) {
-        ctx.fillStyle = dark ? "rgba(251, 191, 36, 0.45)" : "rgba(180, 83, 9, 0.45)";
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = markColor;
         for (const [qs] of peaks.quiet) {
           const x = Math.max(0, Math.min(rect.width - 1.5, (qs / total) * rect.width));
           ctx.fillRect(x, 0, 1.5, rect.height);
         }
+        ctx.restore();
       }
 
       if (marks.length) {
@@ -432,7 +448,7 @@ export function AudioPlayer({
     const sec = ratio * total;
     const ms = sec * 1000;
     const xPx = Math.max(0, Math.min(rect.width, ratio * rect.width));
-    return { ratio, sec, ms, xPx, flipBelow: rect.top < 46 };
+    return { ratio, sec, ms, xPx, flipBelow: rect.top < 72 };
   };
 
   const applyHover = (clientX: number) => {
@@ -465,253 +481,255 @@ export function AudioPlayer({
   };
 
   return (
-    <div className="@container sticky top-0 z-10 -mx-3.5 px-3.5 py-2 mb-2 bg-[var(--glass)] backdrop-blur-md">
-      {/* biome-ignore lint/a11y/useMediaCaption: local meeting recording audio has interactive transcript */}
-      <audio
-        ref={audioRef}
-        id="audio"
-        src={audioSrc}
-        preload="metadata"
-        onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration;
-          if (Number.isFinite(d) && d > 0) setDurSec(d);
-        }}
-        onPlay={() => {
-          setPlaying(true);
-          setPlaybackState((audioRef.current?.currentTime || 0) * 1000, true);
-        }}
-        onPause={() => {
-          setPlaying(false);
-          const s = audioRef.current?.currentTime || 0;
-          curSecRef.current = s;
-          setCurSec(s);
-          positionHead(s);
-          setPlaybackState(s * 1000, false);
-        }}
-        onEnded={() => {
-          setPlaying(false);
-          const s = audioRef.current?.currentTime || 0;
-          curSecRef.current = s;
-          setCurSec(s);
-          positionHead(s);
-          setPlaybackState(s * 1000, false);
-        }}
-        onError={() => {
-          setPlaying(false);
-          pushToast("音频加载失败，请确认录音文件存在", { tone: "error", durationMs: 4000 });
-        }}
-        onTimeUpdate={handleTimeUpdate}
-      />
+    <div className="sticky top-0 z-10 -mx-2 px-2 py-1 bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] backdrop-blur-md">
+      <div className="@container rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-3 py-2">
+        {/* biome-ignore lint/a11y/useMediaCaption: local meeting recording audio has interactive transcript */}
+        <audio
+          ref={audioRef}
+          id="audio"
+          src={audioSrc}
+          preload="metadata"
+          onLoadedMetadata={(e) => {
+            const d = e.currentTarget.duration;
+            if (Number.isFinite(d) && d > 0) setDurSec(d);
+          }}
+          onPlay={() => {
+            setPlaying(true);
+            setPlaybackState((audioRef.current?.currentTime || 0) * 1000, true);
+          }}
+          onPause={() => {
+            setPlaying(false);
+            const s = audioRef.current?.currentTime || 0;
+            curSecRef.current = s;
+            setCurSec(s);
+            positionHead(s);
+            setPlaybackState(s * 1000, false);
+          }}
+          onEnded={() => {
+            setPlaying(false);
+            const s = audioRef.current?.currentTime || 0;
+            curSecRef.current = s;
+            setCurSec(s);
+            positionHead(s);
+            setPlaybackState(s * 1000, false);
+          }}
+          onError={() => {
+            setPlaying(false);
+            pushToast("音频加载失败，请确认录音文件存在", { tone: "error", durationMs: 4000 });
+          }}
+          onTimeUpdate={handleTimeUpdate}
+        />
 
-      <div className="flex flex-wrap @[540px]:flex-nowrap items-center gap-1.5">
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={playing ? "暂停播放" : "播放录音"}
-          className="relative w-9 h-9 rounded-full bg-[var(--ink)] hover:bg-[var(--ink-hover)] active:scale-[0.94] text-[var(--ink-inv)] flex items-center justify-center shrink-0 cursor-pointer mr-0.5 transition-[background-color,transform] duration-150"
-        >
-          <Play
-            className={`w-4 h-4 ml-0.5 absolute transition-[opacity,transform] duration-150 ${
-              playing ? "opacity-0 scale-75" : "opacity-100 scale-100"
-            }`}
-          />
-          <Pause
-            className={`w-4 h-4 absolute transition-[opacity,transform] duration-150 ${
-              playing ? "opacity-100 scale-100" : "opacity-0 scale-75"
-            }`}
-          />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => seekByDelta(-15)}
-          aria-label="后退 15 秒"
-          title="后退 15 秒 (←)"
-          className="relative btn-ghost w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <RotateCcw
-            className={`w-[18px] h-[18px] transition-transform duration-150 ${
-              kickDir === "back" ? "-rotate-45 scale-95" : ""
-            }`}
-            aria-hidden="true"
-          />
-          <span className="absolute text-[8px] font-bold leading-none mt-0.5">15</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => seekByDelta(15)}
-          aria-label="前进 15 秒"
-          title="前进 15 秒 (→)"
-          className="relative btn-ghost w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <RotateCw
-            className={`w-[18px] h-[18px] transition-transform duration-150 ${
-              kickDir === "fwd" ? "rotate-45 scale-95" : ""
-            }`}
-            aria-hidden="true"
-          />
-          <span className="absolute text-[8px] font-bold leading-none mt-0.5">15</span>
-        </button>
-
-        <div className="relative font-mono text-xs num whitespace-nowrap min-w-[96px] text-center px-1">
-          <span className="font-medium text-[var(--text)]">{fmtTs(curSec * 1000)}</span>
-          <span className="text-[var(--muted)]"> / {fmtTs(durSec * 1000)}</span>
-          {skipBadge && (
-            <span className="mn-popover pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1 rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2 py-0.5 text-[10.5px] font-sans whitespace-nowrap shadow-[var(--shadow-1)]">
-              {skipBadge}
-            </span>
-          )}
-        </div>
-
-        <div
-          ref={trackRef}
-          className="group relative order-last @[540px]:order-none basis-full @[540px]:basis-auto @[540px]:flex-1 min-w-[160px] @[540px]:mx-1.5 h-9 cursor-pointer select-none touch-none flex flex-col justify-center"
-          role="slider"
-          aria-label="音频播放进度"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(durSec)}
-          aria-valuenow={Math.round(curSec)}
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowLeft") {
-              e.preventDefault();
-              seekByDelta(-5);
-            } else if (e.key === "ArrowRight") {
-              e.preventDefault();
-              seekByDelta(5);
-            }
-          }}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.preventDefault();
-            e.currentTarget.setPointerCapture(e.pointerId);
-            draggingRef.current = true;
-            setDragging(true);
-            applyHover(e.clientX);
-            applyScrub(e.clientX, false);
-          }}
-          onPointerMove={(e) => {
-            applyHover(e.clientX);
-            if (draggingRef.current) {
-              applyScrub(e.clientX, false);
-            }
-          }}
-          onPointerUp={(e) => {
-            if (draggingRef.current) {
-              draggingRef.current = false;
-              setDragging(false);
-              applyScrub(e.clientX, true);
-              return;
-            }
-            applyScrub(e.clientX, true);
-          }}
-          onPointerCancel={() => {
-            draggingRef.current = false;
-            setDragging(false);
-            const restoreSec = audioRef.current?.currentTime ?? curSecRef.current;
-            curSecRef.current = restoreSec;
-            setCurSec(restoreSec);
-            positionHead(restoreSec);
-            drawWave(restoreSec);
-          }}
-          onPointerLeave={() => {
-            if (!draggingRef.current) setHoverInfo(null);
-          }}
-        >
-          <div className="relative w-full h-[28px]">
-            <canvas ref={canvasRef} className="w-full h-full block" />
-            <div
-              ref={hoverLineRef}
-              aria-hidden="true"
-              className={`pointer-events-none absolute top-0 bottom-0 left-0 w-px bg-[var(--muted)] transition-opacity duration-150 ${
-                hoverInfo ? "opacity-55" : "opacity-0"
+        <div className="flex flex-wrap @[540px]:flex-nowrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={togglePlay}
+            aria-label={playing ? "暂停播放" : "播放录音"}
+            className="relative w-8 h-8 rounded-full bg-[var(--ink)] hover:opacity-90 active:scale-[0.94] text-[var(--ink-fg)] flex items-center justify-center shrink-0 cursor-pointer mr-0.5 transition-[opacity,transform] duration-150"
+          >
+            <Play
+              className={`w-3.5 h-3.5 ml-0.5 absolute transition-[opacity,transform] duration-150 ${
+                playing ? "opacity-0 scale-75" : "opacity-100 scale-100"
               }`}
             />
-            <div
-              ref={headRef}
+            <Pause
+              className={`w-3.5 h-3.5 absolute transition-[opacity,transform] duration-150 ${
+                playing ? "opacity-100 scale-100" : "opacity-0 scale-75"
+              }`}
+            />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => seekByDelta(-15)}
+            aria-label="后退 15 秒"
+            title="后退 15 秒 (←)"
+            className="btn-ghost h-8 px-2 rounded-[8px] text-xs leading-[18px] font-medium num inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <RotateCcw
+              className={`w-3.5 h-3.5 shrink-0 transition-transform duration-150 ${
+                kickDir === "back" ? "-rotate-45 scale-95" : ""
+              }`}
               aria-hidden="true"
-              className="pointer-events-none absolute top-0 bottom-0 left-0 w-[2px] -ml-px bg-[var(--ink)] will-change-transform"
-            >
-              <span
-                className={`block w-2.5 h-2.5 -ml-1 -mt-1 rounded-full bg-[var(--ink)] shadow-xs transition-transform duration-150 ${
-                  dragging ? "scale-125" : "scale-0 group-hover:scale-100"
-                }`}
-              />
-            </div>
+            />
+            <span>15s</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => seekByDelta(15)}
+            aria-label="前进 15 秒"
+            title="前进 15 秒 (→)"
+            className="btn-ghost h-8 px-2 rounded-[8px] text-xs leading-[18px] font-medium num inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>15s</span>
+            <RotateCw
+              className={`w-3.5 h-3.5 shrink-0 transition-transform duration-150 ${
+                kickDir === "fwd" ? "rotate-45 scale-95" : ""
+              }`}
+              aria-hidden="true"
+            />
+          </button>
+
+          <div className="relative num-mono text-xs leading-[18px] whitespace-nowrap shrink-0 min-w-[98px] text-center px-1">
+            <span className="font-medium text-[var(--text)]">{fmtTs(curSec * 1000)}</span>
+            <span className="text-[var(--muted)]"> / {fmtTs(durSec * 1000)}</span>
+            {skipBadge && (
+              <span className="mn-popover pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2.5 py-0.5 text-xs leading-[18px] font-medium font-sans whitespace-nowrap shadow-[var(--shadow-2)]">
+                {skipBadge}
+              </span>
+            )}
           </div>
 
-          {spkSegments.length > 0 && (
-            <div className="relative h-[3px] w-full rounded-full overflow-hidden mt-0.5 bg-[var(--fill)]">
-              {spkSegments.map((seg, i) => (
-                <i
-                  key={i}
-                  className="absolute top-0 bottom-0 opacity-75"
-                  style={{
-                    left: `${seg.leftPct}%`,
-                    width: `${seg.widthPct}%`,
-                    backgroundColor: seg.color,
-                  }}
+          <div
+            ref={trackRef}
+            className="group relative order-last @[540px]:order-none basis-full @[540px]:basis-auto @[540px]:flex-1 min-w-[160px] @[540px]:mx-1.5 h-9 cursor-pointer select-none touch-none flex flex-col justify-center"
+            role="slider"
+            aria-label="音频播放进度"
+            aria-valuemin={0}
+            aria-valuemax={Math.round(durSec)}
+            aria-valuenow={Math.round(curSec)}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                seekByDelta(-5);
+              } else if (e.key === "ArrowRight") {
+                e.preventDefault();
+                seekByDelta(5);
+              }
+            }}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              draggingRef.current = true;
+              setDragging(true);
+              applyHover(e.clientX);
+              applyScrub(e.clientX, false);
+            }}
+            onPointerMove={(e) => {
+              applyHover(e.clientX);
+              if (draggingRef.current) {
+                applyScrub(e.clientX, false);
+              }
+            }}
+            onPointerUp={(e) => {
+              if (draggingRef.current) {
+                draggingRef.current = false;
+                setDragging(false);
+                applyScrub(e.clientX, true);
+                return;
+              }
+              applyScrub(e.clientX, true);
+            }}
+            onPointerCancel={() => {
+              draggingRef.current = false;
+              setDragging(false);
+              const restoreSec = audioRef.current?.currentTime ?? curSecRef.current;
+              curSecRef.current = restoreSec;
+              setCurSec(restoreSec);
+              positionHead(restoreSec);
+              drawWave(restoreSec);
+            }}
+            onPointerLeave={() => {
+              if (!draggingRef.current) setHoverInfo(null);
+            }}
+          >
+            <div className="relative w-full h-[26px]">
+              <canvas ref={canvasRef} className="w-full h-full block" />
+              <div
+                ref={hoverLineRef}
+                aria-hidden="true"
+                className={`pointer-events-none absolute top-0 bottom-0 left-0 w-px bg-[var(--muted)] transition-opacity duration-150 ${
+                  hoverInfo ? "opacity-55" : "opacity-0"
+                }`}
+              />
+              <div
+                ref={headRef}
+                aria-hidden="true"
+                className="pointer-events-none absolute top-0 bottom-0 left-0 w-[2px] -ml-px bg-[var(--ink)] will-change-transform"
+              >
+                <span
+                  className={`block w-2.5 h-2.5 -ml-1 -mt-1 rounded-full bg-[var(--ink)] shadow-xs transition-transform duration-150 ${
+                    dragging ? "scale-125" : "scale-0 group-hover:scale-100"
+                  }`}
                 />
-              ))}
+              </div>
             </div>
-          )}
 
-          {hoverInfo && (
-            <div
-              className={`mn-popover pointer-events-none absolute -translate-x-1/2 rounded-[6px] bg-[var(--ink)] text-[var(--ink-inv)] px-2 py-0.5 text-[11px] font-mono num whitespace-nowrap max-w-[240px] truncate shadow-[var(--shadow-pop)] ${
-                hoverInfo.flipBelow ? "top-10 origin-top" : "-top-7 origin-bottom"
-              }`}
-              style={{ left: `${Math.max(8, Math.min(92, hoverInfo.xPct))}%` }}
-            >
-              {hoverInfo.label}
-              {hoverInfo.snippet ? ` · ${hoverInfo.snippet}` : ""}
-            </div>
-          )}
-        </div>
+            {spkSegments.length > 0 && (
+              <div className="relative h-[3px] w-full rounded-full overflow-hidden mt-1 bg-[var(--fill)]">
+                {spkSegments.map((seg, i) => (
+                  <i
+                    key={i}
+                    className="absolute top-0 bottom-0 opacity-75"
+                    style={{
+                      left: `${seg.leftPct}%`,
+                      width: `${seg.widthPct}%`,
+                      backgroundColor: seg.color,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
 
-        <div className="flex items-center gap-1.5 ml-auto @[540px]:ml-0 shrink-0">
-          {quietSecTotal >= 5 && (
+            {hoverInfo && (
+              <div
+                className={`mn-popover pointer-events-none absolute -translate-x-1/2 rounded-[8px] bg-[var(--ink)] text-[var(--ink-fg)] px-2.5 py-1 text-xs leading-[18px] whitespace-nowrap max-w-[260px] truncate shadow-[var(--shadow-3)] ${
+                  hoverInfo.flipBelow ? "top-10 origin-top" : "-top-8 origin-bottom"
+                }`}
+                style={{ left: `${Math.max(8, Math.min(92, hoverInfo.xPct))}%` }}
+              >
+                <span className="num-mono">{hoverInfo.label}</span>
+                {hoverInfo.snippet ? ` · ${hoverInfo.snippet}` : ""}
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1.5 ml-auto @[540px]:ml-0 shrink-0">
+            {quietSecTotal >= 5 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !skipSilence;
+                  setSkipSilence(next);
+                  try {
+                    localStorage.setItem("skipSilence", next ? "1" : "0");
+                  } catch {}
+                }}
+                aria-pressed={skipSilence}
+                title={`跳过空白停顿（可省约 ${Math.round(quietSecTotal)} 秒）`}
+                className={`rounded-[8px] h-8 px-2.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
+                  skipSilence
+                    ? "bg-[var(--fill-strong)] text-[var(--text)]"
+                    : "bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)]"
+                }`}
+              >
+                {skipSilence ? "已跳过停顿" : "跳过停顿"}
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => {
-                const next = !skipSilence;
-                setSkipSilence(next);
-                try {
-                  localStorage.setItem("skipSilence", next ? "1" : "0");
-                } catch {}
-              }}
-              aria-pressed={skipSilence}
-              title={`跳过空白停顿（可省约 ${Math.round(quietSecTotal)} 秒）`}
-              className={`rounded-full h-7 min-w-[82px] px-2.5 text-xs shrink-0 cursor-pointer transition-colors duration-150 ${
-                skipSilence
-                  ? "bg-[var(--ink)] text-[var(--ink-inv)] font-medium"
-                  : "bg-[var(--surface)] shadow-[var(--shadow-1)] text-[var(--text-2)] hover:text-[var(--text)]"
-              }`}
+              onClick={cycleSpeed}
+              title="切换播放倍速 ([ / ])"
+              className="rounded-[8px] h-8 min-w-[46px] px-2.5 text-xs leading-[18px] font-medium num-mono bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              {skipSilence ? "已跳过停顿" : "跳过停顿"}
+              <span className="sr-only">播放倍速 </span>
+              {speed}×
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={cycleSpeed}
-            title="切换播放倍速 ([ / ])"
-            className="rounded-full h-7 min-w-[40px] px-2 text-xs font-mono num bg-[var(--surface)] shadow-[var(--shadow-1)] text-[var(--text-2)] hover:text-[var(--text)] shrink-0 cursor-pointer transition-colors"
-          >
-            <span className="sr-only">播放倍速 </span>
-            {speed}×
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onMarkCurrent(Math.round(curSec * 1000))}
-            title="在当前播放时刻打个点"
-            aria-label="在当前时刻打点"
-            className="btn-ghost w-7 h-7 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
-          >
-            <Flag className="w-3.5 h-3.5" />
-          </button>
+            <button
+              type="button"
+              onClick={() => onMarkCurrent(Math.round(curSec * 1000))}
+              title="在当前播放时刻打个点"
+              aria-label="在当前时刻打点"
+              className="btn-ghost w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              <Flag className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     </div>

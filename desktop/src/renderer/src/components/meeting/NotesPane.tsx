@@ -4,7 +4,7 @@ import { Clock } from "lucide-react";
 import { useRef } from "react";
 import { useMeetingStore } from "@/stores/meetingStore";
 
-export function NotesPane({ meeting }: { meeting: MeetingDetail }) {
+export function NotesPane({ meeting, isSplit = false }: { meeting: MeetingDetail; isSplit?: boolean }) {
   const pending = useMeetingStore((s) => s.pendingNotes[meeting.meta.id]);
   const setNotesDraft = useMeetingStore((s) => s.setNotesDraft);
   const playMs = useMeetingStore((s) => s.playMs);
@@ -31,15 +31,21 @@ export function NotesPane({ meeting }: { meeting: MeetingDetail }) {
   };
 
   return (
-    <div className="card-surface p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-[var(--muted)]">笔记会作为生成 AI 纪要的重点参考，自动保存</span>
+    <div
+      className={`rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 flex flex-col gap-3.5 ${
+        isSplit ? "" : "max-w-[780px] mx-auto"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <span className="min-w-0 flex-1 text-[13px] leading-[20px] text-[var(--text-2)]">
+          笔记会作为生成 AI 纪要的重点参考，自动保存
+        </span>
         <button
           type="button"
           onClick={insertPlayTs}
-          className="btn-secondary rounded-lg px-2.5 py-1 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+          className="btn-secondary rounded-[8px] h-8 px-3 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <Clock className="w-3.5 h-3.5" />
+          <Clock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
           插入当前播放时间
         </button>
       </div>
@@ -51,13 +57,13 @@ export function NotesPane({ meeting }: { meeting: MeetingDetail }) {
         value={val}
         onChange={(e) => setNotesDraft(meeting.meta.id, e.target.value)}
         placeholder="记录重点、决定、待办……"
-        className="w-full h-[55vh] p-3 text-sm leading-relaxed resize-y"
+        className="w-full h-[55vh] min-h-[280px] p-4 rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] focus:bg-[var(--surface-elev)] focus:border-[var(--line-focus)] text-[15px] leading-[26px] text-[var(--text-body)] placeholder:text-[var(--muted)] resize-y"
       />
 
       <div
         aria-live="polite"
-        className={`text-xs min-h-[18px] transition-colors duration-200 ${
-          pending?.error ? "text-[var(--red)]" : "text-[var(--muted)]"
+        className={`text-xs leading-[18px] min-h-[18px] transition-colors duration-200 ${
+          pending?.error ? "text-[var(--danger)]" : "text-[var(--muted)]"
         }`}
       >
         {pending?.saving

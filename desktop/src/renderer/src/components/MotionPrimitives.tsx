@@ -180,7 +180,7 @@ export function ModalShell({
 
   return createPortal(
     <div
-      className={`mn-backdrop fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] flex justify-center ${
+      className={`mn-backdrop fixed inset-0 z-50 bg-[var(--backdrop)] backdrop-blur-[4px] flex justify-center ${
         isPalette ? "items-start pt-[14vh] px-4" : "items-center p-4"
       } ${backdropClassName}`}
       data-state={state}
@@ -196,7 +196,7 @@ export function ModalShell({
         aria-label={label}
         data-state={state}
         onClick={(e) => e.stopPropagation()}
-        className={`${animClass} w-full ${maxWidthClass} rounded-[14px] bg-[var(--surface-elev)] shadow-[var(--shadow-pop)] overflow-hidden outline-none ${panelClassName}`}
+        className={`${animClass} w-full ${maxWidthClass} rounded-[16px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)] overflow-hidden outline-none ${panelClassName}`}
       >
         {children}
       </div>
@@ -228,7 +228,7 @@ export function DrawerShell({
 
   return createPortal(
     <div
-      className="mn-backdrop fixed inset-0 z-50 bg-black/35 flex justify-end"
+      className="mn-backdrop fixed inset-0 z-50 bg-[var(--backdrop)] backdrop-blur-[4px] flex justify-end"
       data-state={state}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -242,7 +242,7 @@ export function DrawerShell({
         aria-label={label}
         data-state={state}
         onClick={(e) => e.stopPropagation()}
-        className={`mn-drawer ${widthClass} h-full bg-[var(--surface-elev)] shadow-[var(--shadow-pop)] flex flex-col outline-none`}
+        className={`mn-drawer ${widthClass} h-full bg-[var(--surface-elev)] shadow-[var(--shadow-3)] flex flex-col outline-none`}
       >
         {children}
       </div>
@@ -339,21 +339,21 @@ export function SegmentedControl<T extends string>({
     return () => ro.disconnect();
   }, [measure]);
 
-  const padCls = size === "xs" ? "h-[26px] px-1.5 text-[12px]" : "py-1.5 px-2.5 text-xs";
+  const padCls = size === "xs" ? "h-6 px-2 text-xs leading-[18px]" : "h-7 px-2.5 text-xs leading-[18px]";
 
   return (
     <div
       ref={containerRef}
       role="tablist"
       aria-label={ariaLabel}
-      className={`relative rounded-[9px] bg-[var(--fill)] p-[3px] gap-0.5 ${
+      className={`relative rounded-[8px] bg-[var(--fill)] p-[2px] gap-0.5 ${
         fullWidth ? "flex w-full" : "inline-flex"
       } ${className}`}
     >
       {thumb.width > 0 && (
         <span
           aria-hidden="true"
-          className={`mn-slide-indicator pointer-events-none absolute top-[3px] bottom-[3px] left-0 rounded-[7px] bg-[var(--surface)] shadow-[var(--shadow-1)] ${
+          className={`mn-slide-indicator pointer-events-none absolute top-[2px] bottom-[2px] left-0 rounded-[6px] bg-[var(--surface)] shadow-[var(--shadow-1)] ${
             thumb.ready && !prefersReducedMotion()
               ? "transition-[transform,width] duration-[200ms] [transition-timing-function:var(--ease-spring)]"
               : ""
@@ -379,13 +379,17 @@ export function SegmentedControl<T extends string>({
             disabled={opt.disabled}
             title={opt.title}
             onClick={() => onChange(opt.value)}
-            className={`relative z-[1] ${fullWidth ? "flex-1" : ""} ${padCls} rounded-[7px] inline-flex items-center justify-center gap-1 cursor-pointer transition-colors duration-150 ${
+            className={`relative z-[1] ${fullWidth ? "flex-1" : ""} ${padCls} rounded-[6px] inline-flex items-center justify-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
               active ? "text-[var(--text)] font-medium" : "text-[var(--text-2)] hover:text-[var(--text)]"
             }`}
           >
             <span className="truncate">{opt.label}</span>
             {opt.badge !== undefined && opt.badge !== "" && (
-              <span className={`text-[11px] num ${active ? "text-[var(--text-2)]" : "text-[var(--muted)]"}`}>
+              <span
+                className={`text-[11px] leading-[14px] num whitespace-nowrap shrink-0 ${
+                  active ? "text-[var(--text-2)]" : "text-[var(--muted)]"
+                }`}
+              >
                 {opt.badge}
               </span>
             )}
@@ -474,13 +478,15 @@ export function SlidingTabBar<T extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(tab.id)}
-            className={`px-3 py-2 text-[13px] cursor-pointer transition-colors duration-150 inline-flex items-center gap-1.5 ${
+            className={`px-3 py-2 text-[13px] leading-[20px] whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 inline-flex items-center gap-1.5 ${
               active ? "text-[var(--text)] font-medium" : "text-[var(--muted)] hover:text-[var(--text)]"
             }`}
           >
             {tab.label}
             {tab.badge !== undefined && tab.badge !== "" && (
-              <span className="text-[11.5px] num opacity-80">{tab.badge}</span>
+              <span className="text-xs leading-[18px] num opacity-80 whitespace-nowrap shrink-0">
+                {tab.badge}
+              </span>
             )}
           </button>
         );
@@ -551,14 +557,14 @@ export function CopyButton({
     timerRef.current = setTimeout(() => setCopied(false), 1600);
   };
 
-  const sizeCls = size === "xs" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]";
+  const sizeCls = size === "xs" ? "h-7 px-2.5 text-xs leading-[18px]" : "h-8 px-3 text-[13px] leading-[20px]";
 
   return (
     <button
       type="button"
       onClick={() => void handleCopy()}
       aria-label={ariaLabel || (copied ? copiedLabel : label)}
-      className={`btn-secondary rounded-[8px] ${sizeCls} inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0 ${className}`}
+      className={`btn-secondary rounded-[8px] ${sizeCls} inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 ${className}`}
     >
       <span className="relative w-3.5 h-3.5 inline-flex items-center justify-center" aria-hidden="true">
         <Copy
@@ -567,7 +573,7 @@ export function CopyButton({
           }`}
         />
         <Check
-          className={`w-3.5 h-3.5 absolute text-[var(--green)] transition-[opacity,transform] duration-150 ${
+          className={`w-3.5 h-3.5 absolute text-[var(--ok)] transition-[opacity,transform] duration-150 ${
             copied ? "opacity-100 scale-100" : "opacity-0 scale-75"
           }`}
         />
@@ -596,7 +602,7 @@ export function InlineConfirm({
   triggerLabel,
   triggerAriaLabel,
   triggerTitle,
-  triggerClassName = "btn-ghost btn-danger rounded-[7px] px-2.5 h-7 text-xs",
+  triggerClassName = "btn-ghost btn-danger rounded-[8px] px-2.5 h-7 text-xs leading-[18px]",
   triggerIcon,
   message,
   confirmLabel = "确认",
@@ -653,7 +659,7 @@ export function InlineConfirm({
         aria-expanded={open}
         aria-controls={open ? popId : undefined}
         onClick={() => setOpen((v) => !v)}
-        className={`inline-flex items-center justify-center gap-1 cursor-pointer ${triggerClassName}`}
+        className={`inline-flex items-center justify-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${triggerClassName}`}
       >
         {triggerIcon}
         {triggerLabel && <span>{triggerLabel}</span>}
@@ -664,16 +670,16 @@ export function InlineConfirm({
           id={popId}
           role="alertdialog"
           aria-label={message}
-          className={`mn-popover absolute top-full mt-1.5 z-40 w-[230px] rounded-[11px] bg-[var(--surface-elev)] shadow-[var(--shadow-pop)] border border-[var(--line)] p-3 space-y-2.5 text-left ${
+          className={`mn-popover absolute top-full mt-1.5 z-40 w-[236px] rounded-[12px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)] p-3.5 space-y-2.5 text-left ${
             align === "left" ? "left-0 origin-top-left" : "right-0 origin-top-right"
           }`}
         >
-          <p className="text-xs leading-relaxed text-[var(--text)]">{message}</p>
+          <p className="text-[13px] leading-[20px] text-[var(--text)]">{message}</p>
           <div className="flex items-center justify-end gap-1.5">
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="btn-ghost rounded-[7px] h-7 px-2.5 text-xs cursor-pointer"
+              className="btn-ghost rounded-[8px] h-7 px-2.5 text-xs leading-[18px] whitespace-nowrap shrink-0 cursor-pointer"
             >
               {cancelLabel}
             </button>
@@ -681,8 +687,8 @@ export function InlineConfirm({
               type="button"
               disabled={busy}
               onClick={() => void handleConfirm()}
-              className={`rounded-[7px] h-7 px-2.5 text-xs font-medium cursor-pointer transition-colors ${
-                danger ? "bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white" : "btn-primary"
+              className={`rounded-[8px] h-7 px-2.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                danger ? "bg-[var(--danger)] hover:bg-[var(--rec-hover)] text-white" : "btn-primary"
               }`}
             >
               {busy ? "处理中…" : confirmLabel}

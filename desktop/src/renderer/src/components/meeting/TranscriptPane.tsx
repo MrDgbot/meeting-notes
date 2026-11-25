@@ -45,7 +45,7 @@ function renderHighlightedText(text: string, query: string) {
   const parts = text.split(re);
   return parts.map((part, idx) =>
     idx % 2 === 1 ? (
-      <mark key={idx} className="bg-[var(--amber-weak)] text-[var(--text)] rounded px-0.5">
+      <mark key={idx} className="bg-[var(--warn-soft)] text-[var(--text)] font-medium rounded-[4px] px-0.5">
         {part}
       </mark>
     ) : (
@@ -268,19 +268,19 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
   const showSpkCol = Boolean(meeting.transcript) || ps.some((p) => p.ch === 0 || p.ch === 1);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div
-        className={`flex flex-wrap items-center gap-2.5 ${
-          isSplit ? "min-h-[39px] pb-1.5 border-b border-[var(--line)]" : ""
+        className={`flex flex-wrap gap-2 ${
+          isSplit ? "items-end min-h-[40px] border-b border-[var(--line-2)]" : "items-center"
         }`}
       >
         {isSplit && (
-          <span className="relative flex items-center h-[32px] px-1 text-[13.5px] font-medium text-[var(--text)] whitespace-nowrap after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-7px] after:h-[2px] after:rounded-full after:bg-[var(--ink)]">
+          <span className="relative inline-flex items-center h-9 -mb-px px-0.5 text-sm leading-[22px] font-medium text-[var(--text)] whitespace-nowrap shrink-0 after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-0 after:h-[2px] after:rounded-full after:bg-[var(--ink)]">
             转写稿
           </span>
         )}
 
-        <div className="relative flex-1 min-w-[140px] max-w-[240px]">
+        <div className={`relative flex-1 min-w-[148px] max-w-[260px] ${isSplit ? "mb-1" : ""}`}>
           <Search
             className="w-3.5 h-3.5 text-[var(--muted)] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
             aria-hidden="true"
@@ -300,7 +300,9 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
             }}
             placeholder="搜索转写内容"
             aria-label="在转写稿中搜索"
-            className="w-full h-[30px] pl-8 pr-8 text-[13px]"
+            className={`w-full h-8 pl-8 ${
+              query ? "pr-7" : "pr-2.5"
+            } rounded-[8px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] text-[13px] leading-[20px] text-[var(--text)] placeholder:text-[var(--muted)] transition-colors`}
           />
           {query && (
             <button
@@ -310,7 +312,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                 setMatchCursor(0);
               }}
               aria-label="清空转写搜索"
-              className="absolute right-1 top-1/2 -translate-y-1/2 w-[26px] h-[26px] inline-flex items-center justify-center rounded-md text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+              className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 inline-flex items-center justify-center rounded-[6px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--fill-hover)] cursor-pointer transition-colors"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -318,13 +320,19 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
         </div>
 
         {trimmedQ && (
-          <div className="flex items-center gap-0.5 text-xs text-[var(--muted)] num">
-            <span>{matchingIndices.length ? `${matchCursor + 1} / ${matchingIndices.length}` : "0 处"}</span>
+          <div
+            className={`flex items-center gap-0.5 h-8 text-xs leading-[18px] text-[var(--muted)] shrink-0 ${
+              isSplit ? "mb-1" : ""
+            }`}
+          >
+            <span className="num px-1 whitespace-nowrap">
+              {matchingIndices.length ? `${matchCursor + 1} / ${matchingIndices.length}` : "0 处"}
+            </span>
             <button
               type="button"
               onClick={() => jumpMatch(-1)}
               aria-label="上一处匹配"
-              className="btn-ghost rounded-md w-[26px] h-[26px] inline-flex items-center justify-center cursor-pointer"
+              className="btn-ghost rounded-[6px] w-7 h-7 inline-flex items-center justify-center cursor-pointer"
             >
               <ArrowUp className="w-3.5 h-3.5" />
             </button>
@@ -332,7 +340,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
               type="button"
               onClick={() => jumpMatch(1)}
               aria-label="下一处匹配"
-              className="btn-ghost rounded-md w-[26px] h-[26px] inline-flex items-center justify-center cursor-pointer"
+              className="btn-ghost rounded-[6px] w-7 h-7 inline-flex items-center justify-center cursor-pointer"
             >
               <ArrowDown className="w-3.5 h-3.5" />
             </button>
@@ -351,7 +359,9 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                 setSpkFilter(e.target.value);
                 setMatchCursor(0);
               }}
-              className="h-[30px] text-xs px-2"
+              className={`h-8 rounded-[8px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] pl-2 pr-[22px]! bg-[length:12px] bg-[position:right_6px_center] max-w-[124px] text-xs leading-[18px] text-[var(--text)] shrink-0 transition-colors ${
+                isSplit ? "mb-1" : ""
+              }`}
             >
               <option value="all">全部发言人</option>
               {spkMap.ids.map((id) => (
@@ -363,33 +373,47 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
           </>
         )}
 
-        <div className="flex-1" />
-
-        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--text-2)] cursor-pointer select-none whitespace-nowrap">
+        <label
+          className={`ml-auto inline-flex items-center gap-1.5 h-8 text-xs leading-[18px] text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer select-none whitespace-nowrap shrink-0 transition-colors ${
+            isSplit ? "mb-1" : ""
+          }`}
+        >
           <input type="checkbox" checked={followPlay} onChange={(e) => setFollowPlay(e.target.checked)} />
           <span>跟随播放</span>
         </label>
       </div>
 
       {spkMap.ids.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {spkMap.ids.map((id) => {
             const share = spkSharePct.get(id);
+            const isFiltered = spkFilter === String(id);
             return (
               <button
                 key={id}
                 type="button"
                 onClick={() => setRenameSpk(id)}
                 title="点击修改发言人姓名"
-                className="h-[26px] px-2.5 rounded-full bg-[var(--surface)] hover:bg-[var(--btn-hover)] shadow-[var(--shadow-1)] text-xs inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                className={`h-7 px-3 rounded-full text-xs leading-[18px] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  isFiltered
+                    ? "bg-[var(--ink)] text-[var(--ink-fg)]"
+                    : "bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] text-[var(--text)]"
+                }`}
               >
                 <span
-                  className="w-[7px] h-[7px] rounded-full shrink-0"
+                  className="w-2 h-2 rounded-full shrink-0"
                   style={{ backgroundColor: spkMap.spkColor(id) }}
                 />
-                <span>{spkMap.spkName(id)}</span>
-                {share !== undefined && <span className="text-[var(--muted)] num">{share}%</span>}
-                <Pencil className="w-3 h-3 text-[var(--muted)]" aria-hidden="true" />
+                <span className="font-medium">{spkMap.spkName(id)}</span>
+                {share !== undefined && (
+                  <span className={`num ${isFiltered ? "text-[var(--ink-fg)]/75" : "text-[var(--muted)]"}`}>
+                    {share}%
+                  </span>
+                )}
+                <Pencil
+                  className={`w-3 h-3 shrink-0 ${isFiltered ? "text-[var(--ink-fg)]/75" : "text-[var(--muted)]"}`}
+                  aria-hidden="true"
+                />
               </button>
             );
           })}
@@ -398,9 +422,9 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
             <button
               type="button"
               onClick={() => setGuessOpen(true)}
-              className="btn-ghost h-[26px] rounded-full px-2.5 text-xs inline-flex items-center gap-1 cursor-pointer"
+              className="h-7 rounded-full px-3 text-xs leading-[18px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
-              <Sparkles className="w-3.5 h-3.5 text-[var(--muted)]" aria-hidden="true" />
+              <Sparkles className="w-3.5 h-3.5 text-[var(--text-2)] shrink-0" aria-hidden="true" />
               <span>推测姓名</span>
             </button>
           )}
@@ -408,20 +432,20 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
       )}
 
       {autoEntries.length > 0 && (
-        <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-3.5 py-2 text-xs flex flex-wrap items-center gap-2">
-          <span className="text-[var(--muted)]">声纹自动认出：</span>
+        <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-3.5 py-2.5 text-xs leading-[18px] flex flex-wrap items-center gap-2">
+          <span className="font-medium text-[var(--text-2)] whitespace-nowrap shrink-0">声纹自动认出</span>
           {autoEntries.map(([spk, info]) => (
             <span
               key={spk}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--fill)] px-2.5 py-0.5"
+              className="inline-flex items-center gap-1.5 h-7 rounded-full bg-[var(--fill)] px-2.5 text-xs leading-[18px] text-[var(--text)] whitespace-nowrap shrink-0"
             >
-              <span>{info.name || spkMap.spkName(Number(spk))}</span>
+              <span className="font-medium">{info.name || spkMap.spkName(Number(spk))}</span>
               <button
                 type="button"
                 onClick={() => void undoVoiceprint(Number(spk))}
-                className="text-[var(--red)] hover:underline inline-flex items-center gap-0.5 cursor-pointer"
+                className="text-[var(--danger)] hover:underline font-medium inline-flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Undo2 className="w-3 h-3" /> 撤销
+                <Undo2 className="w-3 h-3 shrink-0" /> 撤销
               </button>
             </span>
           ))}
@@ -429,8 +453,8 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
       )}
 
       {(sugEntries.length > 0 || mergeHints.length > 0) && (
-        <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-3.5 py-2 text-xs flex flex-wrap items-center gap-2">
-          <span className="text-[var(--muted)]">声纹建议：</span>
+        <div className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] px-3.5 py-2.5 text-xs leading-[18px] flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-[var(--text)] whitespace-nowrap shrink-0">声纹建议</span>
           {sugEntries.map(([spk, item]) => (
             <button
               key={`sug-${spk}`}
@@ -441,7 +465,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                   pushToast(`已确认发言人：${item.name}`),
                 );
               }}
-              className="btn-secondary rounded-full px-2.5 py-0.5 text-xs cursor-pointer"
+              className="h-7 rounded-full bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-3 text-xs leading-[18px] font-medium text-[var(--text)] inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               {spkMap.spkName(Number(spk))} 是 {item.name}？点此确认
             </button>
@@ -457,7 +481,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                   pushToast(`已合并命名为：${h.name}`),
                 );
               }}
-              className="btn-secondary rounded-full px-2.5 py-0.5 text-xs cursor-pointer"
+              className="h-7 rounded-full bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-3 text-xs leading-[18px] font-medium text-[var(--text)] inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               合并说话人为「{h.name}」
             </button>
@@ -466,27 +490,28 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
       )}
 
       {meeting.suspects.length > 0 && (
-        <div className="rounded-[12px] bg-[var(--amber-weak)] px-3.5 py-2 text-xs flex flex-wrap items-center gap-2">
-          <span className="font-medium text-[var(--amber)]">疑似听错的热词：</span>
+        <div className="rounded-[12px] bg-[var(--warn-soft)] px-3.5 py-2.5 text-xs leading-[18px] flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-[var(--warn)] whitespace-nowrap shrink-0">疑似听错的热词</span>
           {meeting.suspects.map((s) => (
             <span
               key={`${s.hotword}-${s.text}`}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface)] shadow-[var(--shadow-1)] px-2.5 py-0.5"
+              className="inline-flex items-center gap-2 h-7 rounded-full bg-[var(--surface)] shadow-[var(--shadow-1)] px-3 text-xs leading-[18px] text-[var(--text)] whitespace-nowrap shrink-0"
             >
               <span>
-                {s.text} → <b>{s.hotword}</b> ({s.count}处)
+                {s.text} → <span className="font-semibold text-[var(--text)]">{s.hotword}</span>{" "}
+                <span className="text-[var(--muted)] num">({s.count}处)</span>
               </span>
               <button
                 type="button"
                 onClick={() => void acceptSuspectFix(s.text, s.hotword)}
-                className="text-[var(--link)] hover:underline cursor-pointer"
+                className="text-[var(--text)] underline underline-offset-2 hover:opacity-75 font-medium whitespace-nowrap shrink-0 cursor-pointer transition-opacity"
               >
                 全部改正
               </button>
               <button
                 type="button"
                 onClick={() => void dismissSuspect(s.hotword, s.text)}
-                className="text-[var(--muted)] hover:text-[var(--red)] cursor-pointer"
+                className="text-[var(--muted)] hover:text-[var(--danger)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
               >
                 忽略
               </button>
@@ -495,9 +520,9 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
         </div>
       )}
 
-      <div className="@container space-y-0.5 -mx-2">
+      <div className="space-y-1">
         {!visibleRows.length ? (
-          <div className="py-12 text-center text-sm text-[var(--muted)]">
+          <div className="py-14 text-center text-sm leading-[22px] text-[var(--muted)]">
             {ps.length ? "当前筛选条件下没有转写段落" : "暂无转写内容"}
           </div>
         ) : (
@@ -517,6 +542,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
             const ts = tsLabel(p.start, meeting.segmap);
             const quoteLine = `[${fmtTs(p.start)}] ${who ? `${who}：` : ""}${p.text}`;
             const isSearchFocused = trimmedQ && matchingIndices[matchCursor] === idx;
+            const showSpeakerHeader = showSpkCol && Boolean(who) && !sameSpkAsPrev;
 
             return (
               <div
@@ -525,50 +551,122 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                   if (el) paraRefs.current.set(idx, el);
                   else paraRefs.current.delete(idx);
                 }}
-                className={`tr-row group relative rounded-[8px] px-2.5 py-1.5 grid gap-x-3 gap-y-0.5 @[520px]:gap-y-0 items-baseline ${
-                  showSpkCol
-                    ? "grid-cols-[64px_minmax(0,1fr)] @[520px]:grid-cols-[64px_84px_minmax(0,1fr)]"
-                    : "grid-cols-[64px_minmax(0,1fr)]"
-                } ${!sameSpkAsPrev && visPos > 0 ? "mt-1.5" : ""} ${
+                className={`tr-row group rounded-[12px] px-3.5 flex flex-col transition-colors ${
+                  sameSpkAsPrev ? "py-2 gap-1 mt-0.5" : `py-3 gap-2 ${visPos > 0 ? "mt-2" : ""}`
+                } ${
                   isActive
-                    ? "bg-[var(--surface)] shadow-[var(--shadow-1)]"
+                    ? "bg-[var(--fill)] ring-1 ring-inset ring-[var(--line-focus)]"
                     : isSearchFocused
-                      ? "bg-[var(--amber-weak)]"
+                      ? "bg-[var(--warn-soft)]"
                       : "hover:bg-[var(--fill)]"
-                } ${isMarked ? "border-l-[3px] border-l-[var(--amber)] pl-2" : ""}`}
+                } ${isMarked ? "border-l-[3px] border-l-[var(--warn)] pl-3" : ""}`}
               >
-                <button
-                  type="button"
-                  onClick={() => requestSeek(p.start, true)}
-                  title="跳到此处播放"
-                  className="text-left font-mono text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] hover:underline num cursor-pointer justify-self-start whitespace-nowrap"
-                >
-                  {ts}
-                </button>
-
-                {showSpkCol && (
-                  <div className="min-w-0 empty:hidden @[520px]:block">
-                    {(!sameSpkAsPrev || !who) && who && (
+                <div className="flex items-center justify-between gap-2 min-h-[26px]">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {showSpeakerHeader && (
                       <button
                         type="button"
                         onClick={() => {
                           if (p.spk >= 0) setRenameSpk(p.spk);
                         }}
-                        className="text-[13px] font-semibold text-[var(--text)] hover:text-[var(--link)] inline-flex items-center gap-1.5 max-w-full cursor-pointer text-left"
+                        title="点击修改发言人姓名"
+                        className="text-[13px] leading-[20px] font-semibold text-[var(--text)] hover:text-[var(--text)] hover:underline underline-offset-2 inline-flex items-center gap-1.5 min-w-0 max-w-full cursor-pointer text-left transition-colors"
                       >
                         <span
-                          className="w-[7px] h-[7px] rounded-full shrink-0"
+                          className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: spkMap.spkColor(p.spk) }}
                         />
                         <span className="truncate">{who}</span>
                       </button>
                     )}
-                  </div>
-                )}
 
-                <div className={`min-w-0 ${showSpkCol ? "col-start-2 @[520px]:col-start-3" : "col-start-2"}`}>
+                    <button
+                      type="button"
+                      onClick={() => requestSeek(p.start, true)}
+                      title="跳到此处播放"
+                      className={`text-left text-xs leading-[18px] hover:text-[var(--text)] hover:underline num-mono cursor-pointer whitespace-nowrap shrink-0 transition-colors ${
+                        isActive ? "text-[var(--text)] font-medium" : "text-[var(--muted)]"
+                      }`}
+                    >
+                      {ts}
+                    </button>
+
+                    {isMarked && <Flag className="w-3 h-3 text-[var(--warn)] shrink-0" aria-hidden="true" />}
+                  </div>
+
+                  {!isEditingHere && (
+                    <div className="flex items-center gap-0.5 shrink-0 rounded-[8px] bg-[var(--surface-elev)] shadow-[var(--shadow-1)] px-1 py-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity duration-150">
+                      <button
+                        type="button"
+                        onClick={() => quoteToNotes(quoteLine)}
+                        title="引用到我的笔记"
+                        aria-label="引用到我的笔记"
+                        className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer"
+                      >
+                        <Quote className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          askWithQuote(`关于 [${fmtTs(p.start)}] ${who ? `${who}说的` : ""}「${p.text}」：`)
+                        }
+                        title="就此段问 AI"
+                        aria-label="就此段问 AI"
+                        className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer"
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void addMarkAt(p.start, p.text.slice(0, 60))}
+                        title="在此处打点"
+                        aria-label="在此处打点"
+                        className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer"
+                      >
+                        <Flag className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(quoteLine).then(() => {
+                            setCopiedIdx(idx);
+                            pushToast("已复制该段转写");
+                            setTimeout(() => setCopiedIdx(null), 1200);
+                          });
+                        }}
+                        title="复制该段转写"
+                        aria-label="复制该段转写"
+                        className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer relative"
+                      >
+                        <Copy
+                          className={`w-3.5 h-3.5 absolute transition-[opacity,transform] duration-150 ${
+                            copiedIdx === idx ? "opacity-0 scale-75" : "opacity-100 scale-100"
+                          }`}
+                        />
+                        <Check
+                          className={`w-3.5 h-3.5 absolute text-[var(--ok)] transition-[opacity,transform] duration-150 ${
+                            copiedIdx === idx ? "opacity-100 scale-100" : "opacity-0 scale-75"
+                          }`}
+                        />
+                      </button>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => startInlineEdit(idx, p)}
+                          title="编辑这段转写"
+                          aria-label="编辑这段转写"
+                          className="btn-ghost rounded-[6px] w-6 h-6 inline-flex items-center justify-center cursor-pointer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0">
                   {isEditingHere ? (
-                    <div className="space-y-2 py-1">
+                    <div className="space-y-2.5 pt-0.5">
                       <textarea
                         value={editText}
                         onChange={(e) => {
@@ -589,11 +687,11 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                         rows={3}
                         aria-label="编辑转写段落"
                         autoFocus
-                        className="w-full p-2 text-sm bg-[var(--surface)]"
+                        className="w-full p-3 rounded-[10px] bg-[var(--surface-elev)] border border-[var(--line)] focus:border-[var(--line-focus)] text-[15px] leading-[26px] text-[var(--text-body)] transition-colors"
                       />
                       {confirmDeleteIdx === idx ? (
-                        <div className="rounded-[8px] bg-[var(--red-weak)] px-2.5 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-                          <span className="text-[var(--red)] font-medium">确定删除这段转写吗？</span>
+                        <div className="rounded-[10px] bg-[var(--danger-soft)] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs leading-[18px]">
+                          <span className="text-[var(--danger)] font-medium">确定删除这段转写吗？</span>
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
@@ -602,7 +700,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                                 setConfirmDeleteIdx(null);
                                 setEditText(p.text);
                               }}
-                              className="btn-secondary rounded-[6px] px-2 py-0.5 text-xs cursor-pointer"
+                              className="h-7 rounded-[8px] bg-[var(--surface)] hover:bg-[var(--fill-hover)] shadow-[var(--shadow-1)] px-2.5 text-xs leading-[18px] font-medium text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                             >
                               恢复原文
                             </button>
@@ -610,14 +708,14 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                               type="button"
                               disabled={savingEdit}
                               onClick={() => void commitInlineEdit(idx, p, true)}
-                              className="rounded-[6px] px-2 py-0.5 text-xs font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white cursor-pointer"
+                              className="h-7 rounded-[8px] px-2.5 text-xs leading-[18px] font-medium bg-[var(--danger)] hover:opacity-90 text-white whitespace-nowrap shrink-0 cursor-pointer transition-opacity"
                             >
                               确认删除
                             </button>
                           </div>
                         </div>
                       ) : (
-                        <div className="text-[11px] text-[var(--muted)]">
+                        <div className="text-xs leading-[18px] text-[var(--muted)]">
                           清空文字再保存可删除这段 · ⌘↩ 保存 · Esc 取消
                         </div>
                       )}
@@ -627,7 +725,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                             value={editSpk}
                             onChange={(e) => setEditSpk(Number(e.target.value))}
                             aria-label="发言人"
-                            className="text-xs px-2 py-1"
+                            className="h-8 rounded-[8px] bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] pl-2.5 text-[13px] leading-[20px] text-[var(--text)] shrink-0 transition-colors"
                           >
                             {spkMap.ids.map((s) => (
                               <option key={s} value={s}>
@@ -645,7 +743,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                             setConfirmDeleteIdx(null);
                             setEditIdx(null);
                           }}
-                          className="btn-secondary rounded-[8px] px-2.5 py-1 text-xs cursor-pointer"
+                          className="h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-3 text-[13px] leading-[20px] font-medium text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                         >
                           取消
                         </button>
@@ -653,7 +751,7 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                           type="button"
                           disabled={savingEdit}
                           onClick={() => void commitInlineEdit(idx, p)}
-                          className="btn-primary rounded-[8px] px-2.5 py-1 text-xs cursor-pointer"
+                          className="h-8 rounded-[8px] bg-[var(--ink)] hover:bg-[var(--ink-hover)] px-3.5 text-[13px] leading-[20px] font-medium text-[var(--ink-fg)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                         >
                           保存
                         </button>
@@ -662,90 +760,23 @@ export function TranscriptPane({ meeting, isSplit = false }: { meeting: MeetingD
                   ) : (
                     <div
                       onDoubleClick={() => startInlineEdit(idx, p)}
-                      className={`text-[14.5px] leading-[1.7] text-[var(--text-body)] whitespace-pre-wrap break-words pr-2 ${
-                        p.edited ? "border-l-2 border-l-[var(--link)] pl-2" : ""
+                      className={`text-[15px] leading-[26px] text-[var(--text-body)] whitespace-pre-wrap break-words ${
+                        p.edited ? "border-l-2 border-l-[var(--ink)] pl-3" : ""
                       }`}
                     >
                       {renderHighlightedText(p.text, trimmedQ)}
                     </div>
                   )}
                 </div>
-
-                {!isEditingHere && (
-                  <div className="absolute top-1 right-1.5 flex items-center gap-0.5 rounded-[7px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-1 py-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity">
-                    <button
-                      type="button"
-                      onClick={() => quoteToNotes(quoteLine)}
-                      title="引用到我的笔记"
-                      aria-label="引用到我的笔记"
-                      className="btn-ghost rounded p-1 cursor-pointer"
-                    >
-                      <Quote className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        askWithQuote(`关于 [${fmtTs(p.start)}] ${who ? `${who}说的` : ""}「${p.text}」：`)
-                      }
-                      title="就此段问 AI"
-                      aria-label="就此段问 AI"
-                      className="btn-ghost rounded p-1 cursor-pointer"
-                    >
-                      <HelpCircle className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void addMarkAt(p.start, p.text.slice(0, 60))}
-                      title="在此处打点"
-                      aria-label="在此处打点"
-                      className="btn-ghost rounded p-1 cursor-pointer"
-                    >
-                      <Flag className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void navigator.clipboard.writeText(quoteLine).then(() => {
-                          setCopiedIdx(idx);
-                          pushToast("已复制该段转写");
-                          setTimeout(() => setCopiedIdx(null), 1200);
-                        });
-                      }}
-                      title="复制该段转写"
-                      aria-label="复制该段转写"
-                      className="btn-ghost rounded p-1 cursor-pointer relative w-6 h-6 inline-flex items-center justify-center"
-                    >
-                      <Copy
-                        className={`w-3.5 h-3.5 absolute transition-[opacity,transform] duration-150 ${
-                          copiedIdx === idx ? "opacity-0 scale-75" : "opacity-100 scale-100"
-                        }`}
-                      />
-                      <Check
-                        className={`w-3.5 h-3.5 absolute text-[var(--green)] transition-[opacity,transform] duration-150 ${
-                          copiedIdx === idx ? "opacity-100 scale-100" : "opacity-0 scale-75"
-                        }`}
-                      />
-                    </button>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => startInlineEdit(idx, p)}
-                        title="编辑这段转写"
-                        aria-label="编辑这段转写"
-                        className="btn-ghost rounded p-1 cursor-pointer"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })
         )}
 
         {meeting.ambient_active && ambient?.conv?.id === meeting.meta.id && ambient.partial && (
-          <div className="px-2.5 py-1.5 text-sm text-[var(--muted)] italic">正在识别：{ambient.partial}…</div>
+          <div className="px-3.5 py-2.5 text-[15px] leading-[26px] text-[var(--muted)] italic">
+            正在识别：{ambient.partial}…
+          </div>
         )}
       </div>
 

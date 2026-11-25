@@ -8,6 +8,21 @@ import { useAppStore } from "@/stores/appStore";
 import { useMeetingStore } from "@/stores/meetingStore";
 import { useRecorderStore } from "@/stores/recorderStore";
 
+const DIALOG_BACKDROP = "bg-[var(--backdrop)] backdrop-blur-[4px]";
+const DIALOG_PANEL = "rounded-[16px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)] p-6 space-y-4";
+const DIALOG_TITLE = "text-base leading-[24px] font-semibold text-[var(--text)] m-0";
+const DIALOG_DESC = "text-sm leading-[22px] text-[var(--text-2)] m-0";
+const DIALOG_CLOSE_BTN =
+  "w-8 h-8 rounded-[8px] inline-flex items-center justify-center shrink-0 text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--fill-hover)] cursor-pointer transition-colors";
+const DIALOG_INPUT =
+  "h-9 rounded-[10px] px-3 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] text-sm leading-[22px] text-[var(--text)] placeholder:text-[var(--muted)] transition-colors";
+const DIALOG_BTN_SECONDARY =
+  "h-9 rounded-[10px] px-4 text-sm leading-[22px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] inline-flex items-center justify-center whitespace-nowrap shrink-0 cursor-pointer transition-colors";
+const DIALOG_BTN_PRIMARY =
+  "h-9 rounded-[10px] px-4 text-sm leading-[22px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] active:scale-[0.98] text-[var(--ink-fg)] inline-flex items-center justify-center whitespace-nowrap shrink-0 cursor-pointer transition-[background-color,transform] duration-150";
+const DIALOG_BTN_DANGER =
+  "h-9 rounded-[10px] px-4 text-sm leading-[22px] font-medium bg-[var(--danger)] hover:opacity-90 active:scale-[0.98] text-white inline-flex items-center justify-center whitespace-nowrap shrink-0 cursor-pointer transition-[opacity,transform] duration-150";
+
 export function ContinueRecordDialog({
   open,
   meeting,
@@ -57,70 +72,78 @@ export function ContinueRecordDialog({
       open={open}
       onClose={onClose}
       label={meeting.meta.duration ? "继续录音" : "开始录音"}
-      maxWidthClass="max-w-md"
-      panelClassName="p-5 space-y-3 border border-[var(--line)]"
+      maxWidthClass="max-w-[460px]"
+      backdropClassName={DIALOG_BACKDROP}
+      panelClassName={DIALOG_PANEL}
     >
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold m-0">{meeting.meta.duration ? "继续录音" : "开始录音"}</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭窗口"
-          className="btn-ghost rounded-lg w-7 h-7 flex items-center justify-center cursor-pointer"
-        >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className={DIALOG_TITLE}>{meeting.meta.duration ? "继续录音" : "开始录音"}</h2>
+        <button type="button" onClick={onClose} aria-label="关闭窗口" className={DIALOG_CLOSE_BTN}>
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <p className="text-xs text-[var(--muted)] m-0">
+      <p className={DIALOG_DESC}>
         新录音会接在已有录音后面，结束后重新整理全文。
         {meeting.transcript ? "已改的说话人姓名会保留。" : ""}
       </p>
 
       {hasEditedParagraphs && meeting.transcript && (
-        <div className="rounded-lg bg-[var(--red-weak)] text-[var(--red)] p-2.5 text-xs">
+        <div className="rounded-[12px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px]">
           这场有手动修改过的段落，继续录音结束后的重新转写会覆盖这些修改（词库纠错规则不受影响）。
         </div>
       )}
 
       {isDualChannel ? (
-        <div className="rounded-xl bg-[var(--fill)] px-3 py-2 text-xs text-[var(--text-2)]">
+        <div className="rounded-[12px] bg-[var(--fill)] px-3.5 py-2.5 text-[13px] leading-[20px] text-[var(--text-2)]">
           已自动保持「麦克风 + 系统声音」双声道，与先前音轨保持一致。
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-2.5">
           <label
-            className={`rounded-xl border p-2.5 text-xs cursor-pointer flex items-center gap-2 transition-colors ${
-              src === "mic" ? "border-[var(--link)] bg-[var(--fill)]" : "border-[var(--line)]"
+            className={`rounded-[12px] border px-3.5 py-3 text-sm leading-[22px] text-[var(--text)] cursor-pointer flex items-center gap-2.5 transition-colors ${
+              src === "mic"
+                ? "border-[var(--ink)] bg-[var(--fill)]"
+                : "border-[var(--line)] hover:border-[var(--line-focus)] bg-[var(--surface)]"
             }`}
           >
-            <input type="radio" name="contSrc" checked={src === "mic"} onChange={() => setSrc("mic")} />
-            <span className="font-medium">仅麦克风</span>
+            <input
+              type="radio"
+              name="contSrc"
+              checked={src === "mic"}
+              onChange={() => setSrc("mic")}
+              className="accent-[var(--ink)] shrink-0"
+            />
+            <span className="font-medium whitespace-nowrap">仅麦克风</span>
           </label>
           <label
-            className={`rounded-xl border p-2.5 text-xs cursor-pointer flex items-center gap-2 transition-colors ${
-              src === "mix" ? "border-[var(--link)] bg-[var(--fill)]" : "border-[var(--line)]"
+            className={`rounded-[12px] border px-3.5 py-3 text-sm leading-[22px] text-[var(--text)] cursor-pointer flex items-center gap-2.5 transition-colors ${
+              src === "mix"
+                ? "border-[var(--ink)] bg-[var(--fill)]"
+                : "border-[var(--line)] hover:border-[var(--line-focus)] bg-[var(--surface)]"
             }`}
           >
-            <input type="radio" name="contSrc" checked={src === "mix"} onChange={() => setSrc("mix")} />
-            <span className="font-medium">麦克风 + 系统声音</span>
+            <input
+              type="radio"
+              name="contSrc"
+              checked={src === "mix"}
+              onChange={() => setSrc("mix")}
+              className="accent-[var(--ink)] shrink-0"
+            />
+            <span className="font-medium whitespace-nowrap">麦克风 + 系统声音</span>
           </label>
         </div>
       )}
 
       <div className="flex justify-end gap-2 pt-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-secondary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+        <button type="button" onClick={onClose} className={DIALOG_BTN_SECONDARY}>
           取消
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void handleStart()}
-          className="rounded-lg px-3.5 py-1.5 text-xs font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white cursor-pointer transition-colors"
+          className={DIALOG_BTN_DANGER}
         >
           开始录音
         </button>
@@ -180,43 +203,42 @@ export function RetranscribeDialog({
       open={open}
       onClose={onClose}
       label={first ? "精准转写" : "重新转写"}
-      maxWidthClass="max-w-md"
-      panelClassName="p-5 space-y-3 border border-[var(--line)]"
+      maxWidthClass="max-w-[460px]"
+      backdropClassName={DIALOG_BACKDROP}
+      panelClassName={DIALOG_PANEL}
     >
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold m-0">{first ? "精准转写" : "重新转写"}</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭窗口"
-          className="btn-ghost rounded-lg w-7 h-7 flex items-center justify-center cursor-pointer"
-        >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className={DIALOG_TITLE}>{first ? "精准转写" : "重新转写"}</h2>
+        <button type="button" onClick={onClose} aria-label="关闭窗口" className={DIALOG_CLOSE_BTN}>
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <p className="text-xs text-[var(--muted)] m-0">
+      <p className={DIALOG_DESC}>
         {first
           ? "用整段录音再识别一遍，并区分说话人。实时稿会换成这份结果。"
           : "调整参会人数或热词后重新识别。已改的说话人姓名会保留。"}
       </p>
 
       {hasEditedParagraphs && (
-        <div className="rounded-lg bg-[var(--red-weak)] text-[var(--red)] p-2.5 text-xs">
+        <div className="rounded-[12px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px]">
           这场有手动修改过的段落，重新转写会覆盖这些修改（词库纠错规则会自动重新套用）。
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-3.5">
         <div>
-          <label htmlFor="retransSpk" className="block text-xs text-[var(--muted)] mb-1">
+          <label
+            htmlFor="retransSpk"
+            className="block text-[13px] leading-[20px] font-medium text-[var(--text-2)] mb-1.5"
+          >
             参会人数
           </label>
           <select
             id="retransSpk"
             value={numSpk}
             onChange={(e) => setNumSpk(Number(e.target.value))}
-            className="w-full px-2.5 py-1.5 text-xs"
+            className={`w-full ${DIALOG_INPUT}`}
           >
             <option value={0}>自动判断</option>
             {[2, 3, 4, 5, 6, 7, 8, 10, 12].map((n) => (
@@ -228,7 +250,10 @@ export function RetranscribeDialog({
         </div>
 
         <div>
-          <label htmlFor="retransHot" className="block text-xs text-[var(--muted)] mb-1">
+          <label
+            htmlFor="retransHot"
+            className="block text-[13px] leading-[20px] font-medium text-[var(--text-2)] mb-1.5"
+          >
             本场额外热词（空格或逗号分隔，最多 30 个）
           </label>
           <input
@@ -236,25 +261,16 @@ export function RetranscribeDialog({
             type="text"
             value={hotword}
             onChange={(e) => setHotword(e.target.value)}
-            className="w-full px-2.5 py-1.5 text-xs"
+            className={`w-full ${DIALOG_INPUT}`}
           />
         </div>
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-secondary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+        <button type="button" onClick={onClose} className={DIALOG_BTN_SECONDARY}>
           取消
         </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void handleGo()}
-          className="btn-primary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+        <button type="button" disabled={busy} onClick={() => void handleGo()} className={DIALOG_BTN_PRIMARY}>
           {busy ? "提交中…" : "开始"}
         </button>
       </div>
@@ -315,13 +331,19 @@ export function RenameSpeakerDialog({
       open={spk !== null}
       onClose={onClose}
       label="修改发言人姓名"
-      maxWidthClass="max-w-sm"
-      panelClassName="p-5 space-y-3 border border-[var(--line)]"
+      maxWidthClass="max-w-[420px]"
+      backdropClassName={DIALOG_BACKDROP}
+      panelClassName={DIALOG_PANEL}
     >
-      <h2 className="text-base font-semibold m-0">修改发言人姓名</h2>
-      <p className="text-xs text-[var(--muted)] m-0">
-        “{currentName}”的所有发言都会同步改名。填成已有的名字可合并同一人。
-      </p>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className={DIALOG_TITLE}>修改发言人姓名</h2>
+        <button type="button" onClick={onClose} aria-label="关闭窗口" className={DIALOG_CLOSE_BTN}>
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <p className={DIALOG_DESC}>“{currentName}”的所有发言都会同步改名。填成已有的名字可合并同一人。</p>
+
       <input
         type="text"
         value={name}
@@ -332,7 +354,7 @@ export function RenameSpeakerDialog({
         list="spkNameList"
         aria-label="发言人姓名"
         autoFocus
-        className="w-full px-3 py-1.5 text-sm"
+        className={`w-full ${DIALOG_INPUT}`}
       />
       <datalist id="spkNameList">
         {existingNames.map((n) => (
@@ -342,13 +364,15 @@ export function RenameSpeakerDialog({
 
       {quickChoices.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] text-[var(--muted)]">快速选择：</span>
+          <span className="text-xs leading-[18px] text-[var(--muted)] whitespace-nowrap shrink-0">
+            快速选择：
+          </span>
           {quickChoices.map((n) => (
             <button
               key={n}
               type="button"
               onClick={() => void handleSave(n)}
-              className="rounded-full bg-[var(--fill)] hover:bg-[var(--fill-2)] px-2.5 py-0.5 text-xs text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer transition-colors"
+              className="h-7 rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-3 text-xs leading-[18px] font-medium text-[var(--text-2)] hover:text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
             >
               {n}
             </button>
@@ -356,19 +380,15 @@ export function RenameSpeakerDialog({
         </div>
       )}
 
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-secondary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onClose} className={DIALOG_BTN_SECONDARY}>
           取消
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void handleSave()}
-          className="btn-primary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
+          className={DIALOG_BTN_PRIMARY}
         >
           保存
         </button>
@@ -458,22 +478,18 @@ export function GuessNamesDialog({
       open={open}
       onClose={onClose}
       label="推测说话人姓名"
-      maxWidthClass="max-w-lg"
-      panelClassName="p-5 space-y-3 border border-[var(--line)]"
+      maxWidthClass="max-w-[540px]"
+      backdropClassName={DIALOG_BACKDROP}
+      panelClassName={DIALOG_PANEL}
     >
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold m-0">推测说话人姓名</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="关闭窗口"
-          className="btn-ghost rounded-lg w-7 h-7 flex items-center justify-center cursor-pointer"
-        >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className={DIALOG_TITLE}>推测说话人姓名</h2>
+        <button type="button" onClick={onClose} aria-label="关闭窗口" className={DIALOG_CLOSE_BTN}>
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <p className="text-xs text-[var(--muted)] m-0">
+      <p className={DIALOG_DESC}>
         {loading
           ? "AI 正在从对话中查找自我介绍和称呼线索…"
           : error
@@ -490,27 +506,29 @@ export function GuessNamesDialog({
           {resp.candidates.map((c, idx) => (
             <div
               key={`${c.spk}-${idx}`}
-              className="rounded-xl border border-[var(--line)] p-3 space-y-1.5 text-xs"
+              className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3.5 space-y-2"
             >
-              <label className="flex items-center gap-2 font-medium cursor-pointer">
+              <label className="flex flex-wrap items-center gap-2 text-sm leading-[22px] font-medium text-[var(--text)] cursor-pointer">
                 <input
                   type="checkbox"
                   checked={Boolean(checked[idx])}
                   onChange={(e) => setChecked((prev) => ({ ...prev, [idx]: e.target.checked }))}
                 />
-                <span>{spkName(c.spk)} →</span>
+                <span className="whitespace-nowrap shrink-0">{spkName(c.spk)} →</span>
                 <input
                   type="text"
                   value={editedNames[idx] ?? c.name}
                   onChange={(e) => setEditedNames((prev) => ({ ...prev, [idx]: e.target.value }))}
                   aria-label="候选说话人姓名"
-                  className="px-2 py-0.5 text-xs w-32"
+                  className="h-8 rounded-[8px] px-2.5 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)] text-[13px] leading-[20px] text-[var(--text)] w-32 transition-colors"
                 />
-                <span className="text-[var(--muted)]">把握：{c.confidence}</span>
+                <span className="text-xs leading-[18px] text-[var(--muted)] font-normal whitespace-nowrap shrink-0">
+                  把握：{c.confidence}
+                </span>
               </label>
-              <div className="text-[var(--muted)]">{c.reason}</div>
+              <div className="text-[13px] leading-[20px] text-[var(--text-2)]">{c.reason}</div>
               {c.evidence.map((ev, ei) => (
-                <div key={`${ev.ts}-${ei}`} className="text-[var(--text-body)]">
+                <div key={`${ev.ts}-${ei}`} className="text-[13px] leading-[20px] text-[var(--text-body)]">
                   <button
                     type="button"
                     onClick={() => {
@@ -520,7 +538,7 @@ export function GuessNamesDialog({
                         .reduce((a, b) => a * 60 + (Number.isFinite(b) ? b : 0), 0);
                       requestSeek(sec * 1000, true);
                     }}
-                    className="text-[var(--link)] font-mono mr-1.5 hover:underline cursor-pointer"
+                    className="text-xs leading-[18px] text-[var(--text-2)] hover:text-[var(--text)] num-mono mr-1.5 hover:underline whitespace-nowrap cursor-pointer transition-colors"
                   >
                     [{ev.ts}]
                   </button>
@@ -532,12 +550,8 @@ export function GuessNamesDialog({
         </div>
       )}
 
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-secondary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onClose} className={DIALOG_BTN_SECONDARY}>
           {resp?.candidates.length ? "取消" : "关闭"}
         </button>
         {resp && resp.candidates.length > 0 && (
@@ -545,7 +559,7 @@ export function GuessNamesDialog({
             type="button"
             disabled={saving}
             onClick={() => void handleApply()}
-            className="btn-primary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
+            className={DIALOG_BTN_PRIMARY}
           >
             按勾选的改名
           </button>
@@ -617,14 +631,20 @@ export function QuickVocabFixModal({
       open={Boolean(candidate)}
       onClose={onClose}
       label="加入词库纠错"
-      maxWidthClass="max-w-md"
-      panelClassName="p-5 space-y-3 border border-[var(--line)]"
+      maxWidthClass="max-w-[460px]"
+      backdropClassName={DIALOG_BACKDROP}
+      panelClassName={DIALOG_PANEL}
     >
-      <h2 className="text-base font-semibold m-0">以后自动纠正这个错词吗？</h2>
-      <p className="text-xs text-[var(--muted)] m-0">
-        加入词库后，所有记录里相同的写法都会自动改正；删掉规则即可恢复原文。
-      </p>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className={DIALOG_TITLE}>以后自动纠正这个错词吗？</h2>
+        <button type="button" onClick={onClose} aria-label="关闭窗口" className={DIALOG_CLOSE_BTN}>
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <p className={DIALOG_DESC}>加入词库后，所有记录里相同的写法都会自动改正；删掉规则即可恢复原文。</p>
+
+      <div className="flex items-center gap-2.5">
         <input
           type="text"
           value={from}
@@ -633,44 +653,45 @@ export function QuickVocabFixModal({
             setConfirmShort(false);
           }}
           aria-label="错误写法"
-          className="flex-1 px-2.5 py-1.5 text-sm"
+          className={`flex-1 min-w-0 ${DIALOG_INPUT}`}
         />
-        <span className="text-[var(--muted)]">→</span>
+        <span className="text-[var(--muted)] shrink-0">→</span>
         <input
           type="text"
           value={to}
           onChange={(e) => setTo(e.target.value)}
           aria-label="正确写法"
-          className="flex-1 px-2.5 py-1.5 text-sm"
+          className={`flex-1 min-w-0 ${DIALOG_INPUT}`}
         />
       </div>
+
       {from.trim() && (
-        <div className="text-xs text-[var(--muted)] num">
-          本场还有 {matchCount} 处「{from.trim()}」会被改正
+        <div className="text-[13px] leading-[20px] text-[var(--text-2)]">
+          本场还有 <span className="num font-medium text-[var(--text)]">{matchCount}</span> 处「
+          {from.trim()}」会被改正
         </div>
       )}
+
       {confirmShort && (
-        <div className="rounded-lg bg-[var(--amber-weak)] text-[var(--amber)] px-3 py-2 text-xs">
+        <div className="rounded-[12px] bg-[var(--warn-soft)] text-[var(--warn)] px-3.5 py-2.5 text-[13px] leading-[20px]">
           「{from.trim()}」只有 1 个字，可能把其他正常词也一并替换；确定要加入请再点一次确认。
         </div>
       )}
-      <label className="flex items-center gap-2 text-xs cursor-pointer">
+
+      <label className="flex items-center gap-2 text-sm leading-[22px] text-[var(--text)] cursor-pointer">
         <input type="checkbox" checked={addHot} onChange={(e) => setAddHot(e.target.checked)} />
         <span>同时把「{to.trim() || "..."}」加入常用热词</span>
       </label>
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-secondary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
-        >
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onClose} className={DIALOG_BTN_SECONDARY}>
           取消
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={() => void handleConfirm()}
-          className="btn-primary rounded-lg px-3.5 py-1.5 text-xs cursor-pointer"
+          className={DIALOG_BTN_PRIMARY}
         >
           {confirmShort ? "确认加入" : "加入词库"}
         </button>

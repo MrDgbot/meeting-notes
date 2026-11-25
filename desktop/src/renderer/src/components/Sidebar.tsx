@@ -176,21 +176,21 @@ export function Sidebar() {
     if (sidecarStatus && sidecarStatus.phase !== "running") {
       if (sidecarStatus.phase === "bootstrapping") {
         return {
-          dot: "bg-[var(--amber)] animate-pulse",
+          dot: "bg-[var(--warn)] animate-pulse",
           text: "初始化环境中…",
           title: sidecarStatus.bootstrap?.message || "正在准备本机语音运行环境（点击查看日志）",
         };
       }
       if (sidecarStatus.phase === "starting") {
         return {
-          dot: "bg-[var(--amber)] animate-pulse",
+          dot: "bg-[var(--warn)] animate-pulse",
           text: "服务启动中…",
           title: "正在启动本机语音服务（点击查看运行日志）",
         };
       }
       if (sidecarStatus.phase === "error") {
         return {
-          dot: "bg-[var(--red)]",
+          dot: "bg-[var(--danger)]",
           text: "服务需要检查",
           title: sidecarStatus.error || "点击查看运行状态并重启",
         };
@@ -198,19 +198,19 @@ export function Sidebar() {
       return { dot: "bg-[var(--muted)]", text: "服务未连接", title: "点击查看本机语音服务状态" };
     }
     if (!health)
-      return { dot: "bg-[var(--amber)] animate-pulse", text: "连接服务中…", title: "检查本机服务与模型状态" };
+      return { dot: "bg-[var(--warn)] animate-pulse", text: "连接服务中…", title: "检查本机服务与模型状态" };
     if (health.asr_error)
-      return { dot: "bg-[var(--red)]", text: "语音模型需要检查", title: health.asr_error };
+      return { dot: "bg-[var(--danger)]", text: "语音模型需要检查", title: health.asr_error };
     if (health.asr_loading)
-      return { dot: "bg-[var(--amber)] animate-pulse", text: "加载语音模型…", title: "首次加载需要几秒钟" };
+      return { dot: "bg-[var(--warn)] animate-pulse", text: "加载语音模型…", title: "首次加载需要几秒钟" };
     if (health.asr_ready) {
       return {
-        dot: "bg-[var(--green)]",
+        dot: "bg-[var(--ok)]",
         text: "语音识别就绪",
         title: "本机语音识别已就绪（点击查看服务状态）",
       };
     }
-    return { dot: "bg-[var(--amber)]", text: "点击加载模型", title: "点击重新加载语音模型" };
+    return { dot: "bg-[var(--warn)]", text: "点击加载模型", title: "点击重新加载语音模型" };
   })();
 
   const handleStatusClick = async () => {
@@ -230,13 +230,16 @@ export function Sidebar() {
   const ThemeIcon = themeMode === "auto" ? Monitor : themeMode === "light" ? Sun : Moon;
   const themeLabel =
     themeMode === "auto" ? "主题：跟随系统" : themeMode === "light" ? "主题：浅色" : "主题：深色";
+  const hasUpdateBanner = Boolean(
+    updateStatus && (updateStatus.status === "available" || updateStatus.status === "downloaded"),
+  );
 
   return (
     <>
       {narrowBackdrop.mounted && (
         <div
           data-state={narrowBackdrop.state}
-          className="mn-backdrop fixed inset-0 z-30 bg-black/35 md:hidden"
+          className="mn-backdrop fixed inset-0 z-30 bg-[var(--backdrop)] backdrop-blur-[4px] md:hidden"
           onClick={() => setNarrowNavOpen(false)}
           aria-hidden="true"
         />
@@ -246,13 +249,13 @@ export function Sidebar() {
         aria-label="侧边导航栏"
         aria-hidden={asideHidden || undefined}
         inert={asideHidden}
-        className={`mn-side shrink-0 border-r border-[var(--line-2)] bg-[var(--bg)] flex flex-col overflow-hidden transition-[width,opacity,transform] duration-[220ms] [transition-timing-function:var(--ease-out)] z-40 ${
-          sideCollapsed ? "md:w-0 md:border-r-0 md:opacity-0 md:pointer-events-none" : "md:w-[264px]"
-        } fixed md:static inset-y-0 left-0 w-[264px] ${
-          narrowNavOpen ? "translate-x-0 shadow-[var(--shadow-pop)]" : "-translate-x-full md:translate-x-0"
+        className={`mn-side shrink-0 border-r border-[var(--line-2)] bg-[var(--sidebar-bg)] flex flex-col overflow-hidden transition-[width,opacity,transform] duration-[220ms] [transition-timing-function:var(--ease-out)] z-40 ${
+          sideCollapsed ? "md:w-0 md:border-r-0 md:opacity-0 md:pointer-events-none" : "md:w-[272px]"
+        } fixed md:static inset-y-0 left-0 w-[272px] ${
+          narrowNavOpen ? "translate-x-0 shadow-[var(--shadow-3)]" : "-translate-x-full md:translate-x-0"
         }`}
       >
-        <div className="w-[264px] h-full flex flex-col shrink-0">
+        <div className="w-[272px] h-full flex flex-col shrink-0">
           {isMacElectron && <div className="h-[38px] shrink-0 app-drag" aria-hidden="true" />}
 
           <div className="px-3 pt-2.5 pb-2 space-y-2.5">
@@ -260,16 +263,16 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={() => navigate("#/")}
-                className="app-no-drag flex-1 min-w-0 flex items-center gap-2.5 p-1.5 -m-1 rounded-[8px] hover:bg-[var(--fill)] text-left cursor-pointer transition-colors"
+                className="app-no-drag flex-1 min-w-0 flex items-center gap-2.5 p-1.5 -m-1 rounded-[10px] hover:bg-[var(--fill)] text-left cursor-pointer transition-colors"
               >
-                <span className="w-[30px] h-[30px] rounded-[9px] bg-[var(--ink)] text-[var(--ink-inv)] flex items-center justify-center shrink-0">
+                <span className="w-8 h-8 rounded-[10px] bg-[var(--ink)] text-[var(--ink-fg)] flex items-center justify-center shrink-0">
                   <AudioLines className="w-[17px] h-[17px]" aria-hidden="true" />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-[14.5px] font-semibold leading-tight text-[var(--text)]">
+                  <span className="block text-[15px] leading-[20px] font-semibold tracking-[-0.01em] text-[var(--text)] whitespace-nowrap truncate">
                     会议记录
                   </span>
-                  <span className="block text-[11.5px] leading-tight text-[var(--muted)] truncate">
+                  <span className="block text-xs leading-[18px] text-[var(--muted)] truncate">
                     本机转写 · AI 纪要
                   </span>
                 </span>
@@ -280,7 +283,7 @@ export function Sidebar() {
                 onClick={() => setSideCollapsed(true)}
                 aria-label="收起左侧边栏"
                 title="收起侧栏 (⌘\)"
-                className="app-no-drag hidden md:inline-flex btn-ghost rounded-[7px] w-7 h-7 items-center justify-center opacity-70 hover:opacity-100 cursor-pointer shrink-0"
+                className="app-no-drag hidden md:inline-flex btn-ghost rounded-[6px] w-7 h-7 items-center justify-center opacity-70 hover:opacity-100 cursor-pointer shrink-0"
               >
                 <PanelLeftClose className="w-4 h-4" />
               </button>
@@ -289,9 +292,9 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => navigate("#/")}
-              className="btn-primary w-full h-9 rounded-[8px] px-3 text-[13.5px] flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full h-9 rounded-[10px] px-3 text-sm leading-[22px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] active:scale-[0.98] text-[var(--ink-fg)] flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-[background-color,transform] duration-150"
             >
-              <Plus className="w-4 h-4" aria-hidden="true" />
+              <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>新建会议</span>
             </button>
 
@@ -301,9 +304,12 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={() => navigate(`#/m/${recMid}`)}
-                className="w-full rounded-[8px] bg-[var(--red-weak)] text-[var(--red)] px-3 py-2 text-xs font-medium flex items-center gap-2 cursor-pointer"
+                className="w-full rounded-[10px] bg-[var(--danger-soft)] text-[var(--danger)] px-3 py-2 text-[13px] leading-[20px] font-medium flex items-center gap-2 cursor-pointer transition-colors"
               >
-                <span className="w-2 h-2 rounded-full bg-[var(--red)] rec-dot shrink-0" aria-hidden="true" />
+                <span
+                  className="w-2 h-2 rounded-full bg-[var(--danger)] rec-dot shrink-0"
+                  aria-hidden="true"
+                />
                 <span className="truncate">正在录音，点击回到界面</span>
               </button>
             )}
@@ -312,57 +318,57 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={() => navigate("#/todos")}
-                className={`rounded-[8px] px-2.5 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer transition-colors duration-150 ${
+                className={`h-8 rounded-[10px] px-2.5 text-[13px] leading-[20px] font-medium flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
                   hash.startsWith("#/todos")
-                    ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)]"
-                    : "text-[var(--text-2)] hover:bg-[var(--fill)]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill)] [html[data-theme='dark']_&]:shadow-none"
+                    : "text-[var(--text-2)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
                 }`}
               >
-                <CheckSquare className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <CheckSquare className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>待办中心</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => navigate("#/people")}
-                className={`rounded-[8px] px-2.5 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer transition-colors duration-150 ${
+                className={`h-8 rounded-[10px] px-2.5 text-[13px] leading-[20px] font-medium flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
                   hash.startsWith("#/people")
-                    ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)]"
-                    : "text-[var(--text-2)] hover:bg-[var(--fill)]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill)] [html[data-theme='dark']_&]:shadow-none"
+                    : "text-[var(--text-2)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
                 }`}
               >
-                <Users className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <Users className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>人物</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => navigate("#/projects")}
-                className={`rounded-[8px] px-2.5 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer transition-colors duration-150 ${
+                className={`h-8 rounded-[10px] px-2.5 text-[13px] leading-[20px] font-medium flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
                   hash.startsWith("#/projects")
-                    ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)]"
-                    : "text-[var(--text-2)] hover:bg-[var(--fill)]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill)] [html[data-theme='dark']_&]:shadow-none"
+                    : "text-[var(--text-2)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
                 }`}
               >
-                <FolderKanban className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <FolderKanban className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>项目脉络</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => navigate("#/weekly")}
-                className={`rounded-[8px] px-2.5 py-1.5 text-xs flex items-center gap-1.5 cursor-pointer transition-colors duration-150 ${
+                className={`h-8 rounded-[10px] px-2.5 text-[13px] leading-[20px] font-medium flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
                   hash.startsWith("#/weekly")
-                    ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)]"
-                    : "text-[var(--text-2)] hover:bg-[var(--fill)]"
+                    ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill)] [html[data-theme='dark']_&]:shadow-none"
+                    : "text-[var(--text-2)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
                 }`}
               >
-                <BookOpenText className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <BookOpenText className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span>周报</span>
               </button>
             </div>
 
-            <div className="flex items-center gap-1 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-2)] focus-within:bg-[var(--surface)] focus-within:shadow-[0_0_0_1px_var(--line)] pl-2.5 pr-1 h-[34px] transition-colors">
+            <div className="flex items-center gap-1.5 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] focus-within:bg-[var(--surface-elev)] focus-within:shadow-[0_0_0_1px_var(--line-focus)] pl-2.5 pr-1 h-8 transition-colors">
               <Search className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
               <input
                 type="text"
@@ -370,14 +376,14 @@ export function Sidebar() {
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="搜索标题和内容"
                 aria-label="搜索会议列表"
-                className="flex-1 min-w-0 h-full px-1 py-0 text-[13px] bg-transparent border-0 shadow-none hover:bg-transparent focus:bg-transparent focus:border-0 focus:shadow-none"
+                className="flex-1 min-w-0 h-full px-0.5 py-0 text-[13px] leading-[20px] bg-transparent border-0 shadow-none hover:bg-transparent focus:bg-transparent focus:border-0 focus:shadow-none"
               />
               {filter ? (
                 <button
                   type="button"
                   onClick={clearSearch}
                   aria-label="清空搜索"
-                  className="w-6 h-6 shrink-0 rounded-full hover:bg-[var(--fill-2)] text-[var(--muted)] flex items-center justify-center cursor-pointer"
+                  className="w-6 h-6 shrink-0 rounded-[6px] hover:bg-[var(--fill-hover)] text-[var(--muted)] hover:text-[var(--text)] flex items-center justify-center cursor-pointer transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -386,14 +392,14 @@ export function Sidebar() {
                   type="button"
                   onClick={() => setPaletteOpen(true)}
                   title="命令面板 (⌘K)"
-                  className="h-6 min-w-[28px] px-1.5 shrink-0 rounded-[5px] bg-[var(--surface)] shadow-[var(--shadow-1)] text-[11px] font-mono text-[var(--muted)] hover:text-[var(--text)] flex items-center justify-center cursor-pointer"
+                  className="h-6 min-w-[28px] px-1.5 shrink-0 rounded-[6px] bg-[var(--surface)] shadow-[var(--shadow-1)] text-[11px] leading-[14px] font-mono text-[var(--muted)] hover:text-[var(--text)] flex items-center justify-center cursor-pointer transition-colors"
                 >
                   <span className="sr-only">打开命令面板 </span>⌘K
                 </button>
               )}
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <SegmentedControl
                 value={sideKind}
                 onChange={setSideKind}
@@ -409,9 +415,9 @@ export function Sidebar() {
                   onClick={toggleHideShort}
                   aria-pressed={hideShort}
                   title={hideShort ? "已隐藏不到 1 分钟的短片段" : "隐藏不到 1 分钟的短片段"}
-                  className={`h-[30px] shrink-0 rounded-[7px] px-2 text-[11.5px] cursor-pointer transition-colors duration-150 ${
+                  className={`h-8 shrink-0 whitespace-nowrap rounded-[8px] px-2.5 text-xs leading-[18px] cursor-pointer transition-colors duration-150 ${
                     hideShort
-                      ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)]"
+                      ? "bg-[var(--surface)] text-[var(--text)] font-medium shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill-hover)] [html[data-theme='dark']_&]:shadow-none"
                       : "text-[var(--muted)] hover:bg-[var(--fill)] hover:text-[var(--text)]"
                   }`}
                 >
@@ -423,21 +429,23 @@ export function Sidebar() {
 
           <nav className="flex-1 overflow-y-auto px-2 pb-2 space-y-2.5" aria-label="会议记录列表">
             {!meetingsLoaded ? (
-              <div className="px-2 py-8 text-center text-xs text-[var(--muted)]">正在加载记录…</div>
+              <div className="px-2 py-8 text-center text-[13px] leading-[20px] text-[var(--muted)]">
+                正在加载记录…
+              </div>
             ) : !grouped.length ? (
-              <div className="px-2 py-8 text-center text-xs text-[var(--muted)]">
+              <div className="px-2 py-8 text-center text-[13px] leading-[20px] text-[var(--muted)]">
                 {filter.trim() ? "没有匹配的会议记录" : "还没有会议记录"}
               </div>
             ) : (
               grouped.map((g) => (
                 <div key={g.date} className="space-y-0.5">
                   {g.date !== "未知日期" && (
-                    <div className="group flex items-center justify-between px-2.5 pt-2 pb-1 text-xs text-[var(--muted)]">
-                      <span>{dayLabel(g.date)}</span>
+                    <div className="group flex items-center justify-between gap-2 px-2.5 pt-2.5 pb-1 text-xs leading-[18px] font-medium text-[var(--muted)]">
+                      <span className="whitespace-nowrap shrink-0">{dayLabel(g.date)}</span>
                       <button
                         type="button"
                         onClick={() => navigate(`#/day/${g.date}`)}
-                        className="text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+                        className="text-xs leading-[18px] font-normal text-[var(--muted)] hover:text-[var(--text)] opacity-80 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 whitespace-nowrap shrink-0 transition-opacity cursor-pointer"
                       >
                         当日汇总 →
                       </button>
@@ -456,36 +464,38 @@ export function Sidebar() {
                         key={m.id}
                         type="button"
                         onClick={() => navigate(`#/m/${m.id}`)}
-                        className={`w-full text-left rounded-[8px] px-2.5 py-1.5 transition-colors duration-150 cursor-pointer ${
+                        className={`w-full text-left rounded-[10px] px-2.5 py-2 transition-colors duration-150 cursor-pointer ${
                           isActive
-                            ? "bg-[var(--surface)] shadow-[var(--shadow-1)] text-[var(--text)]"
+                            ? "bg-[var(--surface)] shadow-[var(--shadow-1)] [html[data-theme='dark']_&]:bg-[var(--fill)] [html[data-theme='dark']_&]:shadow-none text-[var(--text)]"
                             : "hover:bg-[var(--fill)] text-[var(--text-body)]"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-1.5 min-w-0">
                           <span
-                            className={`text-[13.5px] truncate flex-1 ${
-                              dur >= 60 ? "font-medium" : "text-[var(--text-2)]"
+                            className={`text-sm leading-[20px] truncate flex-1 ${
+                              isActive || dur >= 60
+                                ? "font-medium text-[var(--text)]"
+                                : "text-[var(--text-2)]"
                             }`}
                           >
                             {m.title || "未命名会议"}
                           </span>
                           {m.source === "upload" ? (
-                            <Upload className="w-3 h-3 text-[var(--muted)] shrink-0" aria-hidden="true" />
+                            <Upload className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
                           ) : m.source === "mic" ? (
-                            <Mic className="w-3 h-3 text-[var(--muted)] shrink-0" aria-hidden="true" />
+                            <Mic className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
                           ) : null}
                         </div>
 
-                        <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-[var(--muted)] num">
-                          <span>{hm(m.created)}</span>
-                          {dur > 0 && <span>· {fmtDur(dur)}</span>}
+                        <div className="mt-0.5 flex items-center gap-1.5 text-xs leading-[18px] text-[var(--muted)] num">
+                          <span className="num-mono whitespace-nowrap shrink-0">{hm(m.created)}</span>
+                          {dur > 0 && <span className="whitespace-nowrap shrink-0">· {fmtDur(dur)}</span>}
                           {statusLabel && (
                             <span
-                              className={`px-1.5 py-0 rounded text-[10.5px] font-medium ${
+                              className={`px-1.5 py-0 rounded-[4px] text-xs leading-[16px] font-medium whitespace-nowrap shrink-0 ${
                                 m.status === "error" || m.status === "recording" || isRecHere
-                                  ? "bg-[var(--red-weak)] text-[var(--red)]"
-                                  : "bg-[var(--amber-weak)] text-[var(--amber)]"
+                                  ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                                  : "bg-[var(--warn-soft)] text-[var(--warn)]"
                               }`}
                             >
                               {statusLabel}
@@ -494,7 +504,7 @@ export function Sidebar() {
                         </div>
 
                         {(hit?.snippet || m.brief) && (
-                          <div className="mt-0.5 text-[11.5px] text-[var(--text-2)] truncate">
+                          <div className="mt-0.5 text-xs leading-[18px] text-[var(--text-2)] truncate">
                             {hit?.snippet || m.brief}
                           </div>
                         )}
@@ -509,48 +519,48 @@ export function Sidebar() {
               <button
                 type="button"
                 onClick={toggleHideShort}
-                className="w-full py-2 text-center text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+                className="w-full py-2 text-center text-xs leading-[18px] text-[var(--muted)] hover:text-[var(--text)] cursor-pointer transition-colors"
               >
                 已隐藏 {hiddenShortCount} 条短片段（点击显示）
               </button>
             )}
           </nav>
 
-          {updateStatus && (updateStatus.status === "available" || updateStatus.status === "downloaded") && (
-            <div className="px-3 pb-1.5">
-              <button
-                type="button"
-                onClick={() => openSettingsTab("about")}
-                className="w-full min-h-[30px] rounded-[8px] px-2.5 py-1 text-xs bg-[var(--fill)] hover:bg-[var(--fill-2)] text-[var(--text)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
-              >
-                <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
-                  <Download className="w-3.5 h-3.5 shrink-0 text-[var(--link)]" aria-hidden="true" />
-                  <span className="truncate">
-                    {updateStatus.status === "downloaded"
-                      ? "新版本已就绪 · 点击安装"
-                      : `发现新版本 v${updateStatus.info?.version ?? ""}`}
+          {(hasUpdateBanner || trashCount > 0) && (
+            <div className="border-t border-[var(--line-2)] pt-2 pb-1.5 px-3 space-y-1.5 shrink-0">
+              {hasUpdateBanner && updateStatus && (
+                <button
+                  type="button"
+                  onClick={() => openSettingsTab("about")}
+                  className="w-full h-8 rounded-[8px] px-2.5 text-xs leading-[18px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                >
+                  <span className="inline-flex items-center gap-1.5 min-w-0 truncate">
+                    <Download className="w-3.5 h-3.5 shrink-0 text-[var(--text-2)]" aria-hidden="true" />
+                    <span className="truncate font-medium">
+                      {updateStatus.status === "downloaded"
+                        ? "新版本已就绪 · 点击安装"
+                        : `发现新版本 v${updateStatus.info?.version ?? ""}`}
+                    </span>
                   </span>
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--link)] shrink-0" aria-hidden="true" />
-              </button>
-            </div>
-          )}
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--ink)] shrink-0" aria-hidden="true" />
+                </button>
+              )}
 
-          {trashCount > 0 && (
-            <div className="px-3 pb-1.5">
-              <button
-                type="button"
-                onClick={() => setTrashOpen(true)}
-                className="w-full min-h-[30px] rounded-[8px] px-2.5 py-1 text-xs text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--fill)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  <span>废纸篓</span>
-                </span>
-                <span className="num text-[11px] px-1.5 py-0.5 rounded-full bg-[var(--fill)] text-[var(--text-2)]">
-                  {trashCount}
-                </span>
-              </button>
+              {trashCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setTrashOpen(true)}
+                  className="w-full h-8 rounded-[8px] px-2.5 text-xs leading-[18px] text-[var(--text-2)] hover:text-[var(--text)] hover:bg-[var(--fill)] flex items-center justify-between gap-2 whitespace-nowrap cursor-pointer transition-colors"
+                >
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap shrink-0">
+                    <Trash2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span>废纸篓</span>
+                  </span>
+                  <span className="num text-[11px] leading-[14px] px-1.5 py-0.5 rounded-full bg-[var(--fill)] text-[var(--text-2)] whitespace-nowrap shrink-0">
+                    {trashCount}
+                  </span>
+                </button>
+              )}
             </div>
           )}
 
@@ -560,7 +570,7 @@ export function Sidebar() {
               id="asrBadge"
               onClick={() => void handleStatusClick()}
               title={statusMeta.title}
-              className="flex-1 min-w-0 flex items-center gap-2 text-left text-xs text-[var(--muted)] hover:text-[var(--text)] cursor-pointer py-1"
+              className="flex-1 min-w-0 flex items-center gap-2 text-left text-xs leading-[18px] text-[var(--muted)] hover:text-[var(--text)] cursor-pointer py-1 transition-colors"
             >
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusMeta.dot}`} aria-hidden="true" />
               <span className="truncate">{statusMeta.text}</span>
@@ -573,9 +583,9 @@ export function Sidebar() {
                 onClick={cycleTheme}
                 aria-label={themeLabel}
                 title={themeLabel}
-                className="btn-ghost rounded-[7px] w-7 h-7 flex items-center justify-center cursor-pointer"
+                className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer"
               >
-                <ThemeIcon className="w-3.5 h-3.5" />
+                <ThemeIcon className="w-4 h-4" />
               </button>
               <button
                 type="button"
@@ -583,9 +593,9 @@ export function Sidebar() {
                 onClick={() => setShortcutsOpen(true)}
                 aria-label="键盘快捷键"
                 title="快捷键说明 (?)"
-                className="btn-ghost rounded-[7px] w-7 h-7 flex items-center justify-center cursor-pointer"
+                className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer"
               >
-                <CircleHelp className="w-3.5 h-3.5" />
+                <CircleHelp className="w-4 h-4" />
               </button>
               <button
                 type="button"
@@ -593,9 +603,9 @@ export function Sidebar() {
                 onClick={() => setSettingsOpen(true)}
                 aria-label="设置"
                 title="设置 (⌘,)"
-                className="btn-ghost rounded-[7px] w-7 h-7 flex items-center justify-center cursor-pointer"
+                className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer"
               >
-                <Settings className="w-3.5 h-3.5" />
+                <Settings className="w-4 h-4" />
               </button>
             </div>
           </footer>

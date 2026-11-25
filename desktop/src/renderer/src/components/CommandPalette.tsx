@@ -222,19 +222,19 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, items, activeIdx, setOpen]);
 
-  const iconFor = (it: PaletteCommand) => {
-    if (it.id === "quick-ask" || it.id === "vp-wizard")
-      return <Sparkles className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "new") return <Mic className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "todos") return <CheckSquare className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "people") return <Users className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "projects") return <FolderKanban className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "weekly") return <BookOpenText className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "today") return <Calendar className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "sidecar") return <Cpu className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "settings") return <Settings className="w-4 h-4 text-[var(--muted)]" />;
-    if (it.id === "theme") return <Moon className="w-4 h-4 text-[var(--muted)]" />;
-    return <FileText className="w-4 h-4 text-[var(--muted)]" />;
+  const iconFor = (it: PaletteCommand, active: boolean) => {
+    const cls = `w-4 h-4 shrink-0 transition-colors ${active ? "text-[var(--text)]" : "text-[var(--muted)]"}`;
+    if (it.id === "quick-ask" || it.id === "vp-wizard") return <Sparkles className={cls} />;
+    if (it.id === "new") return <Mic className={cls} />;
+    if (it.id === "todos") return <CheckSquare className={cls} />;
+    if (it.id === "people") return <Users className={cls} />;
+    if (it.id === "projects") return <FolderKanban className={cls} />;
+    if (it.id === "weekly") return <BookOpenText className={cls} />;
+    if (it.id === "today") return <Calendar className={cls} />;
+    if (it.id === "sidecar") return <Cpu className={cls} />;
+    if (it.id === "settings") return <Settings className={cls} />;
+    if (it.id === "theme") return <Moon className={cls} />;
+    return <FileText className={cls} />;
   };
 
   const firstMeetingIdx = items.findIndex((it) => it.kind === "meeting");
@@ -246,10 +246,11 @@ export function CommandPalette() {
       onClose={() => setOpen(false)}
       label="命令面板"
       variant="palette"
-      maxWidthClass="max-w-lg"
-      panelClassName="border border-[var(--line)]"
+      maxWidthClass="max-w-xl"
+      backdropClassName="bg-[var(--backdrop)] backdrop-blur-[4px]"
+      panelClassName="rounded-[16px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)]"
     >
-      <div className="flex items-center gap-2.5 px-3.5 py-2.5 border-b border-[var(--line-2)]">
+      <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[var(--line-2)]">
         <Search className="w-4 h-4 text-[var(--muted)] shrink-0" />
         <input
           ref={inputRef}
@@ -261,47 +262,58 @@ export function CommandPalette() {
           }}
           placeholder="搜索全部会议、人物或执行命令…"
           aria-label="搜索命令或会议"
-          className="flex-1 bg-transparent border-0 shadow-none focus:shadow-none focus:border-0 text-sm px-0 py-0.5"
+          className="flex-1 min-w-0 bg-transparent border-0 shadow-none hover:bg-transparent focus:bg-transparent focus:shadow-none focus:border-0 text-[15px] leading-[22px] text-[var(--text)] placeholder:text-[var(--muted)] px-0 py-0.5"
         />
-        <kbd className="font-mono text-[11px] text-[var(--muted)] px-1.5 py-0.5 rounded bg-[var(--fill)]">
+        <kbd className="font-mono text-[11px] leading-[14px] text-[var(--muted)] px-1.5 py-0.5 rounded-[6px] bg-[var(--fill)] border border-[var(--line-2)] whitespace-nowrap shrink-0">
           Esc
         </kbd>
       </div>
 
-      <div className="max-h-[54vh] overflow-y-auto p-1.5 space-y-0.5">
+      <div className="max-h-[56vh] overflow-y-auto p-2 space-y-0.5">
         {!items.length ? (
-          <div className="py-8 text-center text-xs text-[var(--muted)]">没有匹配的命令或会议</div>
+          <div className="py-10 text-center text-[13px] leading-[20px] text-[var(--muted)]">
+            没有匹配的命令或会议
+          </div>
         ) : (
-          items.map((it, idx) => (
-            <div key={it.id}>
-              {idx === 0 && hasActions && (
-                <div className="px-2.5 pt-1 pb-0.5 text-[11px] font-medium text-[var(--muted)]">常用操作</div>
-              )}
-              {idx === firstMeetingIdx && (
-                <div className="px-2.5 pt-2 pb-0.5 text-[11px] font-medium text-[var(--muted)]">会议记录</div>
-              )}
-              <button
-                ref={(el) => {
-                  itemRefs.current[idx] = el;
-                }}
-                type="button"
-                onMouseEnter={() => setActiveIdx(idx)}
-                onClick={() => {
-                  setOpen(false);
-                  it.run();
-                }}
-                className={`w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-2.5 text-sm cursor-pointer transition-colors ${
-                  idx === activeIdx
-                    ? "bg-[var(--fill-2)] text-[var(--text)]"
-                    : "text-[var(--text-body)] hover:bg-[var(--fill)]"
-                }`}
-              >
-                {iconFor(it)}
-                <span className="flex-1 truncate font-medium">{it.label}</span>
-                <span className="text-xs text-[var(--muted)] shrink-0 num">{it.hint}</span>
-              </button>
-            </div>
-          ))
+          items.map((it, idx) => {
+            const active = idx === activeIdx;
+            return (
+              <div key={it.id}>
+                {idx === 0 && hasActions && (
+                  <div className="px-3 pt-1.5 pb-1 text-xs leading-[18px] font-medium text-[var(--muted)]">
+                    常用操作
+                  </div>
+                )}
+                {idx === firstMeetingIdx && (
+                  <div className="px-3 pt-2.5 pb-1 text-xs leading-[18px] font-medium text-[var(--muted)]">
+                    会议记录
+                  </div>
+                )}
+                <button
+                  ref={(el) => {
+                    itemRefs.current[idx] = el;
+                  }}
+                  type="button"
+                  onMouseEnter={() => setActiveIdx(idx)}
+                  onClick={() => {
+                    setOpen(false);
+                    it.run();
+                  }}
+                  className={`w-full text-left rounded-[10px] px-3 py-2 flex items-center gap-2.5 text-sm leading-[22px] cursor-pointer transition-colors duration-150 ${
+                    active
+                      ? "bg-[var(--fill-hover)] text-[var(--text)]"
+                      : "text-[var(--text-body)] hover:bg-[var(--fill)]"
+                  }`}
+                >
+                  {iconFor(it, active)}
+                  <span className="flex-1 truncate font-medium">{it.label}</span>
+                  <span className="text-xs leading-[18px] text-[var(--muted)] whitespace-nowrap shrink-0 num">
+                    {it.hint}
+                  </span>
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
     </ModalShell>

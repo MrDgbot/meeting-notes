@@ -128,9 +128,9 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
 
   if (loading && (!meeting || meeting.meta.id !== mid)) {
     return (
-      <div className="max-w-[1040px] mx-auto px-7 py-8 space-y-5">
+      <div className="max-w-[1040px] mx-auto px-7 sm:px-8 py-6 space-y-5">
         <SkeletonLines lines={2} className="max-w-md" />
-        <div className="card-surface p-5">
+        <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5">
           <SkeletonLines lines={6} />
         </div>
       </div>
@@ -139,12 +139,12 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
 
   if (loadError && (!meeting || meeting.meta.id !== mid)) {
     return (
-      <div className="max-w-xl mx-auto px-5 py-12 text-center space-y-3">
-        <div className="text-sm text-[var(--red)]">{loadError}</div>
+      <div className="max-w-xl mx-auto px-6 py-12 text-center space-y-3">
+        <div className="text-sm leading-[22px] text-[var(--danger)]">{loadError}</div>
         <button
           type="button"
           onClick={() => void showMeeting(mid)}
-          className="btn-secondary rounded-[8px] px-4 py-1.5 text-xs cursor-pointer"
+          className="btn-secondary rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
         >
           重试
         </button>
@@ -232,9 +232,13 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
   ];
 
   return (
-    <div className={`mx-auto px-7 pt-2 pb-10 space-y-2.5 ${useSplit ? "max-w-[1640px]" : "max-w-[1040px]"}`}>
+    <div
+      className={`mx-auto px-7 sm:px-8 pt-3 pb-10 space-y-3 ${
+        useSplit ? "max-w-[1640px]" : "max-w-[1040px]"
+      }`}
+    >
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 flex-1 space-y-1">
+        <div className="min-w-0 flex-1 space-y-1.5">
           {editingTitle ? (
             <input
               type="text"
@@ -247,7 +251,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
               }}
               aria-label="编辑会议标题"
               autoFocus
-              className="text-[22px] font-semibold px-2 py-0.5 -ml-2 w-full max-w-xl bg-[var(--surface)]"
+              className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] px-2 py-0.5 -ml-2 w-full max-w-2xl rounded-[8px] bg-[var(--surface-elev)] border border-[var(--line-focus)] text-[var(--text)]"
             />
           ) : (
             <h1
@@ -256,49 +260,49 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                 setEditingTitle(true);
               }}
               title="点击修改会议标题"
-              className="text-[22px] font-semibold tracking-[-0.01em] m-0 px-2 py-0.5 -ml-2 rounded-[8px] cursor-text hover:bg-[var(--fill)] inline-block transition-colors"
+              className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 px-2 py-0.5 -ml-2 rounded-[8px] cursor-text hover:bg-[var(--fill)] inline-block transition-colors"
             >
               {m.title || "未命名会议"}
             </h1>
           )}
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-[var(--muted)] num">
-            <span className="inline-flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 opacity-75" aria-hidden="true" />
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[13px] leading-[20px] text-[var(--text-2)] num">
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <Calendar className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
               {(m.created || "").slice(0, 10)} {hm(m.created)}
             </span>
             {m.duration > 0 && (
-              <span className="inline-flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 opacity-75" aria-hidden="true" />
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <Clock className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
                 时长 {fmtDur(m.duration)}
               </span>
             )}
             {m.source === "ambient" && (
-              <span className="inline-flex items-center gap-1">
-                <Radio className="w-3.5 h-3.5 opacity-75" aria-hidden="true" />
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <Radio className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
                 全天自动记录
               </span>
             )}
             {spkMap.ids.length > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <Users className="w-3.5 h-3.5 opacity-75" aria-hidden="true" />
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <Users className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
                 {spkMap.ids.length} 位发言人
               </span>
             )}
             {(m.asr?.cloud_failed || m.asr?.nano_failed || (m.asr?.failed ?? 0) > 0) && (
-              <span title={asrInfo(m.asr, true)} className="text-[var(--amber)]">
+              <span title={asrInfo(m.asr, true)} className="text-[var(--warn)] whitespace-nowrap">
                 {asrInfo(m.asr, false)}
               </span>
             )}
             {m.rsi_exclude && (
-              <span className="rounded px-1.5 py-0 text-[11px] bg-[var(--amber-weak)] text-[var(--amber)] font-medium">
+              <span className="rounded-[6px] px-2 py-0.5 text-xs leading-[18px] bg-[var(--warn-soft)] text-[var(--warn)] font-medium whitespace-nowrap shrink-0">
                 不参与学习
               </span>
             )}
             {recHealth && (
               <span
                 title={recHealth.tip}
-                className={recHealth.hasIssue ? "text-[var(--amber)]" : "text-[var(--green)]"}
+                className={`whitespace-nowrap ${recHealth.hasIssue ? "text-[var(--warn)]" : "text-[var(--ok)]"}`}
               >
                 {recHealth.summaryText}
               </span>
@@ -306,40 +310,44 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
           </div>
 
           {(m.brief || (m.tags && m.tags.length > 0) || (m.status === "ready" && !isRecHere && !busy)) && (
-            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs">
-              {m.brief && <span className="text-[var(--text-2)]">{m.brief}</span>}
-              {(m.tags || []).slice(0, 4).map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-md bg-[var(--fill)] px-2 py-0.5 text-[11px] text-[var(--text-2)]"
-                >
-                  #{tag}
-                </span>
-              ))}
-              {m.status === "ready" && !isRecHere && !busy && (
-                <button
-                  type="button"
-                  disabled={briefBusy}
-                  onClick={() => void handleGenerateBrief()}
-                  className="btn-ghost rounded-[7px] px-2 h-6 text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <Sparkles className="w-3 h-3" aria-hidden="true" />
-                  <span>{briefBusy ? "提炼中…" : m.brief ? "更新摘要" : "生成一句话摘要"}</span>
-                </button>
+            <div className="space-y-1.5 pt-0.5">
+              {m.brief && <p className="m-0 text-[13px] leading-[20px] text-[var(--text-2)]">{m.brief}</p>}
+              {((m.tags && m.tags.length > 0) || (m.status === "ready" && !isRecHere && !busy)) && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[13px] leading-[20px]">
+                  {(m.tags || []).slice(0, 4).map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-[6px] bg-[var(--fill)] px-2 py-0.5 text-xs leading-[18px] text-[var(--text-2)] whitespace-nowrap shrink-0"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                  {m.status === "ready" && !isRecHere && !busy && (
+                    <button
+                      type="button"
+                      disabled={briefBusy}
+                      onClick={() => void handleGenerateBrief()}
+                      className="btn-ghost rounded-[8px] px-2.5 h-7 text-xs leading-[18px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span>{briefBusy ? "提炼中…" : m.brief ? "更新摘要" : "生成一句话摘要"}</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           )}
         </div>
 
         {!isRecHere && (
-          <div className="flex flex-wrap items-center gap-0.5 pt-0.5">
+          <div className="flex flex-wrap items-center gap-1 pt-0.5">
             {!busy && !meeting.live_active && !meeting.ambient_active && (
               <button
                 type="button"
                 onClick={() => setContinueOpen(true)}
-                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] inline-flex items-center gap-1.5 cursor-pointer"
+                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                <Mic className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>{m.duration ? "继续录音" : "开始录音"}</span>
               </button>
             )}
@@ -348,9 +356,9 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
               <button
                 type="button"
                 onClick={() => setRetransOpen(true)}
-                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] inline-flex items-center gap-1.5 cursor-pointer"
+                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                <RefreshCw className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>{m.source === "ambient" && m.status === "recording" ? "精准转写" : "重新转写"}</span>
               </button>
             )}
@@ -360,11 +368,11 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
               onClick={() => void handleTogglePrivacy()}
               aria-pressed={Boolean(m.rsi_exclude)}
               title="设为隐私会议后，该场不会用于声纹识别和词库自学习"
-              className={`rounded-[8px] h-8 px-2.5 text-[13px] inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
-                m.rsi_exclude ? "bg-[var(--amber-weak)] text-[var(--amber)] font-medium" : "btn-ghost"
+              className={`rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                m.rsi_exclude ? "bg-[var(--warn-soft)] text-[var(--warn)]" : "btn-ghost"
               }`}
             >
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+              <Lock className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               <span>隐私会议</span>
             </button>
 
@@ -373,25 +381,25 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                 type="button"
                 onClick={() => void window.desktopAPI?.revealMeeting(m.id)}
                 title="在访达中显示会议目录"
-                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] inline-flex items-center gap-1.5 cursor-pointer"
+                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                <FolderOpen className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span className="hidden xl:inline">文件目录</span>
               </button>
             )}
 
-            <div ref={exportWrapRef} className="relative">
+            <div ref={exportWrapRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setExportOpen((v) => !v)}
                 aria-expanded={exportOpen}
-                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] inline-flex items-center gap-1.5 cursor-pointer"
+                className="btn-ghost rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                <Download className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>导出</span>
               </button>
               {exportOpen && (
-                <div className="mn-popover absolute right-0 mt-1.5 w-36 rounded-[12px] bg-[var(--surface-elev)] shadow-[var(--shadow-pop)] border border-[var(--line)] py-1 z-30 text-xs">
+                <div className="mn-popover absolute right-0 mt-1.5 w-40 rounded-[12px] bg-[var(--surface-elev)] shadow-[var(--shadow-3)] p-1 z-30 text-[13px] leading-[20px]">
                   {(
                     [
                       ["md", "Markdown (.md)"],
@@ -404,7 +412,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                       key={fmt}
                       type="button"
                       onClick={() => handleExport(fmt)}
-                      className="w-full text-left px-3 py-1.5 hover:bg-[var(--fill)] cursor-pointer transition-colors"
+                      className="w-full text-left px-2.5 py-1.5 rounded-[8px] text-[var(--text)] hover:bg-[var(--fill)] whitespace-nowrap cursor-pointer transition-colors"
                     >
                       {label}
                     </button>
@@ -415,7 +423,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
 
             {!isRecHere && !meeting.live_active && (
               <>
-                <span className="h-4 w-px bg-[var(--line-2)] mx-1" aria-hidden="true" />
+                <span className="h-4 w-px bg-[var(--line-2)] mx-1 shrink-0" aria-hidden="true" />
                 <InlineConfirm
                   triggerAriaLabel="删除会议"
                   triggerTitle="移入废纸篓"
@@ -436,8 +444,8 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
       ) : (
         <>
           {busy && (
-            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-2.5 text-xs flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 animate-spin text-[var(--link)]" />
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-2.5 text-[13px] leading-[20px] text-[var(--text-body)] flex items-center gap-2.5">
+              <RefreshCw className="w-4 h-4 animate-spin text-[var(--text-2)] shrink-0" />
               <span>
                 {m.status === "queued"
                   ? "正在排队等待语音识别与声纹聚类…"
@@ -447,7 +455,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
           )}
 
           {meeting.ambient_active && (
-            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-4 py-2.5 text-[13px] leading-[20px] text-[var(--text-body)] flex flex-wrap items-center justify-between gap-2">
               <span>
                 全天模式正在记录这段对话（静音 {ambient?.cfg.split_min ?? 5} 分钟后自动结束并精准转写）
               </span>
@@ -457,15 +465,15 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                   void flushNotes(m.id).then(() => runAmbientAction({ action: "split" }));
                   setTimeout(() => void showMeeting(m.id, { keepTab: true }), 800);
                 }}
-                className="btn-secondary rounded-[8px] px-2.5 py-1 text-xs inline-flex items-center gap-1 cursor-pointer"
+                className="btn-secondary rounded-[8px] h-7 px-2.5 text-xs leading-[18px] font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <Scissors className="w-3.5 h-3.5" /> 现在结束这段
+                <Scissors className="w-3.5 h-3.5 shrink-0" /> 现在结束这段
               </button>
             </div>
           )}
 
           {meeting.live_active && (
-            <div className="rounded-[12px] bg-[var(--amber-weak)] px-4 py-2.5 text-xs text-[var(--amber)] flex items-center justify-between gap-3">
+            <div className="rounded-[12px] bg-[var(--warn-soft)] px-4 py-2.5 text-[13px] leading-[20px] text-[var(--warn)] flex items-center justify-between gap-3">
               <span>
                 {meeting.live_state?.state === "reconnecting"
                   ? `录音设备已断开连接，等待重连（剩余 ${fmtDur(meeting.live_state.grace_left || 0)}）`
@@ -481,7 +489,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                     })
                     .catch((e) => pushToast(String(e), 4000));
                 }}
-                className="btn-secondary rounded-[8px] px-2.5 py-1 text-xs cursor-pointer"
+                className="btn-secondary rounded-[8px] h-7 px-2.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
               >
                 现在结束
               </button>
@@ -489,7 +497,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
           )}
 
           {m.status === "error" && (
-            <div className="rounded-[12px] bg-[var(--red-weak)] px-4 py-2.5 text-xs text-[var(--red)] flex items-center justify-between gap-3">
+            <div className="rounded-[12px] bg-[var(--danger-soft)] px-4 py-2.5 text-[13px] leading-[20px] text-[var(--danger)] flex items-center justify-between gap-3">
               <span className="flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 转写失败：{m.error}
@@ -498,7 +506,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                 <button
                   type="button"
                   onClick={() => setRetransOpen(true)}
-                  className="btn-secondary rounded-[8px] px-2.5 py-1 text-xs cursor-pointer"
+                  className="btn-secondary rounded-[8px] h-7 px-2.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   重新转写
                 </button>
@@ -533,7 +541,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
               }}
             >
               <section className="min-w-0 pr-1">
-                <div className="flex items-center gap-2 min-h-[39px] mb-3 border-b border-[var(--line-2)]">
+                <div className="flex items-end gap-2 min-h-[40px] mb-3.5 border-b border-[var(--line-2)]">
                   <SlidingTabBar
                     value={effectiveTab}
                     onChange={(nextTab) => {
@@ -542,22 +550,22 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                     }}
                     tabs={tabs}
                     ariaLabel="会议内容视图"
-                    className="border-b-0 flex-1"
+                    className="border-b-0 flex-1 -mb-px gap-1 [&_[role=tab]]:h-9 [&_[role=tab]]:px-3 [&_[role=tab]]:py-0 [&_[role=tab]]:text-sm [&_[role=tab]]:leading-[22px] [&_[role=tab][aria-selected=false]]:text-[var(--text-2)] [&_[role=tab][aria-selected=false]:hover]:text-[var(--text)] [&_[role=tab][aria-selected=true]]:text-[var(--text)] [&_[role=tab][aria-selected=true]]:font-medium"
                   />
                   <button
                     type="button"
                     onClick={() => setSplitView(false)}
                     title="改回单栏标签页视图"
-                    className="btn-ghost rounded-[8px] px-2.5 h-[30px] text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer shrink-0 mb-1"
+                    className="btn-ghost rounded-[8px] px-2.5 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 mb-1"
                   >
-                    <Columns2 className="w-3.5 h-3.5" aria-hidden="true" /> 单栏
+                    <Columns2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> 单栏
                   </button>
                 </div>
 
                 <div key={effectiveTab} className="mn-page-enter">
-                  {effectiveTab === "minutes" && <MinutesPane key={m.id} meeting={meeting} />}
-                  {effectiveTab === "notes" && <NotesPane meeting={meeting} />}
-                  {effectiveTab === "qa" && <QaPane meeting={meeting} />}
+                  {effectiveTab === "minutes" && <MinutesPane key={m.id} meeting={meeting} isSplit={true} />}
+                  {effectiveTab === "notes" && <NotesPane meeting={meeting} isSplit={true} />}
+                  {effectiveTab === "qa" && <QaPane meeting={meeting} isSplit={true} />}
                 </div>
               </section>
 
@@ -606,7 +614,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                   el.addEventListener("pointerup", onUp);
                   el.addEventListener("pointercancel", onUp);
                 }}
-                className="border-0 m-0 self-stretch w-4 h-auto cursor-col-resize flex items-center justify-center bg-transparent after:content-[''] after:block after:w-[3px] after:h-12 after:rounded-full after:bg-transparent hover:after:bg-[var(--line)] focus-visible:after:bg-[var(--ink)]"
+                className="border-0 m-0 self-stretch w-4 h-auto cursor-col-resize flex items-center justify-center bg-transparent after:content-[''] after:block after:w-[3px] after:h-12 after:rounded-full after:bg-transparent hover:after:bg-[var(--line-focus)] focus-visible:after:bg-[var(--ink)]"
               />
 
               <section className="min-w-0 pl-1">
@@ -615,7 +623,7 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
             </div>
           ) : (
             <div>
-              <div className="flex items-center gap-2 min-h-[39px] mb-3 border-b border-[var(--line-2)]">
+              <div className="flex items-end gap-2 min-h-[40px] mb-3.5 border-b border-[var(--line-2)]">
                 <SlidingTabBar
                   value={effectiveTab}
                   onChange={(nextTab) => {
@@ -624,25 +632,25 @@ export function MeetingPage({ mid, initialSeekSec }: { mid: string; initialSeekS
                   }}
                   tabs={tabs}
                   ariaLabel="会议内容视图"
-                  className="border-b-0 flex-1"
+                  className="border-b-0 flex-1 -mb-px gap-1 [&_[role=tab]]:h-9 [&_[role=tab]]:px-3 [&_[role=tab]]:py-0 [&_[role=tab]]:text-sm [&_[role=tab]]:leading-[22px] [&_[role=tab][aria-selected=false]]:text-[var(--text-2)] [&_[role=tab][aria-selected=false]:hover]:text-[var(--text)] [&_[role=tab][aria-selected=true]]:text-[var(--text)] [&_[role=tab][aria-selected=true]]:font-medium"
                 />
                 {canSplitWidth && (
                   <button
                     type="button"
                     onClick={() => setSplitView(true)}
                     title="左看纪要右看转写稿"
-                    className="btn-ghost rounded-[8px] px-2.5 h-[30px] text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer shrink-0 mb-1"
+                    className="btn-ghost rounded-[8px] px-2.5 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 mb-1"
                   >
-                    <Columns2 className="w-3.5 h-3.5" aria-hidden="true" /> 分屏
+                    <Columns2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" /> 分屏
                   </button>
                 )}
               </div>
 
               <div key={effectiveTab} className="mn-page-enter">
-                {effectiveTab === "minutes" && <MinutesPane key={m.id} meeting={meeting} />}
+                {effectiveTab === "minutes" && <MinutesPane key={m.id} meeting={meeting} isSplit={false} />}
                 {effectiveTab === "transcript" && <TranscriptPane key={m.id} meeting={meeting} />}
-                {effectiveTab === "notes" && <NotesPane meeting={meeting} />}
-                {effectiveTab === "qa" && <QaPane meeting={meeting} />}
+                {effectiveTab === "notes" && <NotesPane meeting={meeting} isSplit={false} />}
+                {effectiveTab === "qa" && <QaPane meeting={meeting} isSplit={false} />}
               </div>
             </div>
           )}

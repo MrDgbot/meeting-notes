@@ -46,7 +46,7 @@ interface SavedFormPrefs {
 
 const WEEKDAYS_ZH = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"] as const;
 const WEEKDAYS_SHORT = ["日", "一", "二", "三", "四", "五", "六"] as const;
-const CHART_COLORS = ["var(--chart-1)", "var(--chart-3)", "var(--chart-2)", "var(--chart-4)"] as const;
+const SPEAKER_BAR_OPACITIES = [0.75, 0.58, 0.45, 0.35, 0.28] as const;
 
 function loadPrefs(): SavedFormPrefs {
   try {
@@ -639,13 +639,13 @@ export function HomePage() {
   );
 
   return (
-    <div className="max-w-[1160px] mx-auto px-6 sm:px-9 py-7 flex flex-col">
+    <div className="max-w-[1160px] mx-auto px-5 xl:px-9 py-7 flex flex-col">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-[28px] font-semibold tracking-[-0.025em] leading-tight text-[var(--text)] m-0 num">
+          <h1 className="text-[26px] leading-[36px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 num">
             {todayHeading}
           </h1>
-          <p className="text-[13.5px] text-[var(--muted)] m-0 mt-1 num">
+          <p className="text-sm leading-[22px] text-[var(--text-2)] m-0 mt-1 num">
             {summaryParts.length > 0
               ? summaryParts.join(" · ")
               : ambient?.enabled
@@ -659,11 +659,11 @@ export function HomePage() {
             <button
               type="button"
               onClick={() => setInsightsOpen(true)}
-              className="btn-secondary rounded-[9px] px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              className="btn-secondary rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <Bell className="w-3.5 h-3.5 text-[var(--amber)]" aria-hidden="true" />
+              <Bell className="w-4 h-4 text-[var(--warn)] shrink-0" aria-hidden="true" />
               <span>待确认</span>
-              <span className="rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-1.5 py-0 text-[11px] font-medium num">
+              <span className="rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-1.5 py-0.5 text-[11px] leading-[14px] font-medium num whitespace-nowrap shrink-0">
                 {insightCount}
               </span>
             </button>
@@ -677,20 +677,20 @@ export function HomePage() {
                 navigate("#/quick-ask");
               }
             }}
-            className="btn-ghost rounded-[9px] px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+            className="btn-ghost rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+            <Sparkles className="w-4 h-4 shrink-0" aria-hidden="true" />
             <span>全局闪问</span>
           </button>
           <button
             type="button"
             onClick={() => navigate("#/people")}
-            className="btn-secondary rounded-[9px] px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+            className="btn-secondary rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <Users className="w-3.5 h-3.5" aria-hidden="true" />
+            <Users className="w-4 h-4 shrink-0" aria-hidden="true" />
             <span>人物</span>
             {people.length > 0 && (
-              <span className="rounded-full bg-[var(--fill)] px-1.5 py-0 text-[11px] text-[var(--text-2)] num">
+              <span className="rounded-full bg-[var(--fill)] px-1.5 py-0.5 text-[11px] leading-[14px] text-[var(--text-2)] num whitespace-nowrap shrink-0">
                 {people.length}
               </span>
             )}
@@ -701,17 +701,17 @@ export function HomePage() {
       <Disclosure open={Boolean(detectedMeetingApp && !recActive)}>
         {detectedMeetingApp && (
           <div className="pb-5">
-            <div className="card-surface px-5 py-3.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-5 py-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <span
-                  className="w-2.5 h-2.5 rounded-full bg-[var(--green)] animate-pulse shrink-0"
+                  className="w-2.5 h-2.5 rounded-full bg-[var(--ok)] animate-pulse shrink-0"
                   aria-hidden="true"
                 />
                 <div className="min-w-0">
-                  <div className="text-[13.5px] font-medium text-[var(--text)]">
+                  <div className="text-sm leading-[22px] font-semibold text-[var(--text)]">
                     检测到正在进行 {detectedMeetingApp.name}
                   </div>
-                  <div className="text-xs text-[var(--muted)]">
+                  <div className="text-[13px] leading-[20px] text-[var(--text-2)]">
                     已为你选中「麦+电脑音」双声道，同时录制你的话筒与对方声音
                   </div>
                 </div>
@@ -720,7 +720,7 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => dismissDetectedMeetingApp()}
-                  className="btn-ghost rounded-[8px] px-2.5 h-8 text-xs cursor-pointer"
+                  className="btn-ghost rounded-[8px] px-3 h-8 text-[13px] leading-[20px] whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   本次忽略
                 </button>
@@ -731,9 +731,9 @@ export function HomePage() {
                     setSrc("mix");
                     void handleStartRecording("mix");
                   }}
-                  className="btn-primary rounded-[8px] px-3 h-8 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  className="rounded-[8px] px-3.5 h-8 text-[13px] leading-[20px] font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] active:scale-[0.98] text-white inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-[background-color,transform] duration-150 disabled:opacity-55"
                 >
-                  <Radio className="w-3.5 h-3.5" aria-hidden="true" />
+                  <Radio className="w-4 h-4 shrink-0" aria-hidden="true" />
                   <span>开始双声道录音</span>
                 </button>
               </div>
@@ -744,15 +744,15 @@ export function HomePage() {
 
       <Disclosure open={Boolean(!detectedMeetingApp && autostartHint && !recActive)}>
         <div className="pb-5">
-          <div className="card-surface px-5 py-3 flex items-center justify-between gap-2 text-xs text-[var(--text-2)]">
+          <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-5 py-3.5 flex items-center justify-between gap-2 text-[13px] leading-[20px] text-[var(--text-2)]">
             <span>已为你切换到「麦+电脑音」双声道模式，输入标题或直接点击下方「开始录音」即可开始。</span>
             <button
               type="button"
               onClick={() => setAutostartHint(false)}
               aria-label="关闭提示"
-              className="btn-ghost rounded-md w-[26px] h-[26px] flex items-center justify-center cursor-pointer shrink-0"
+              className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer shrink-0"
             >
-              <X className="w-3.5 h-3.5" aria-hidden="true" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -761,15 +761,15 @@ export function HomePage() {
       <Disclosure open={Boolean(recActive && recMid)}>
         {recMid && (
           <div className="pb-5">
-            <div className="rounded-[14px] bg-[var(--red-weak)] px-5 py-3 flex items-center justify-between gap-3 text-xs text-[var(--red)]">
+            <div className="rounded-[16px] bg-[var(--danger-soft)] px-5 py-3.5 flex items-center justify-between gap-3 text-[13px] leading-[20px] text-[var(--danger)]">
               <span className="font-medium inline-flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[var(--red)] rec-dot" aria-hidden="true" />
+                <span className="w-2 h-2 rounded-full bg-[var(--danger)] rec-dot" aria-hidden="true" />
                 当前正在录音中
               </span>
               <button
                 type="button"
                 onClick={() => navigate(`#/m/${recMid}`)}
-                className="rounded-[8px] px-3 h-7 bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white font-medium cursor-pointer transition-colors"
+                className="rounded-[8px] px-3 h-8 text-[13px] leading-[20px] bg-[var(--rec)] hover:bg-[var(--rec-hover)] text-white font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors"
               >
                 回到录音界面
               </button>
@@ -778,27 +778,31 @@ export function HomePage() {
         )}
       </Disclosure>
 
-      <div className="mb-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+      <div className="mb-6 grid grid-cols-1 lg:grid-cols-12 gap-5 xl:gap-6 items-stretch">
         <section
-          className="lg:col-span-7 rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 flex flex-col"
+          className="lg:col-span-7 rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 flex flex-col"
           aria-label="快速开始会议"
         >
           <div className="flex-1 flex flex-col justify-between gap-5">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2.5">
-                <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">新建会议</h2>
-                <span className="text-[11.5px] text-[var(--muted)]">支持拖放音视频文件</span>
+              <div className="flex items-center gap-2.5 min-w-0">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                  新建会议
+                </h2>
+                <span className="text-xs leading-[18px] text-[var(--muted)] truncate">
+                  支持拖放音视频文件
+                </span>
               </div>
               <button
                 type="button"
                 onClick={() => setOptionsOpen((v) => !v)}
                 aria-expanded={optionsOpen}
-                className="btn-ghost h-8 px-2.5 rounded-[8px] text-xs inline-flex items-center gap-1 cursor-pointer"
+                className="btn-ghost h-8 px-2.5 rounded-[8px] text-[13px] leading-[20px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>选项</span>
                 <ChevronDown
-                  className={`w-3.5 h-3.5 transition-transform duration-200 ${optionsOpen ? "rotate-180" : ""}`}
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${optionsOpen ? "rotate-180" : ""}`}
                   aria-hidden="true"
                 />
               </button>
@@ -817,7 +821,7 @@ export function HomePage() {
               }}
               placeholder="准备记一场什么会？输入标题，或留空按时间自动命名…"
               aria-label="会议标题"
-              className="w-full h-11 px-4 text-[15px] font-medium rounded-[12px]"
+              className="w-full h-11 px-4 text-[15px] leading-[22px] font-medium rounded-[10px]"
             />
 
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -846,9 +850,9 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="btn-secondary h-10 px-4 rounded-[10px] text-[13px] inline-flex items-center gap-1.5 cursor-pointer"
+                  className="btn-secondary h-10 px-4 rounded-[10px] text-sm leading-[22px] font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <Upload className="w-3.5 h-3.5" aria-hidden="true" />
+                  <Upload className="w-4 h-4 shrink-0" aria-hidden="true" />
                   <span>{uploadPct !== null ? `上传中 ${Math.round(uploadPct)}%` : "导入音频"}</span>
                 </button>
 
@@ -856,9 +860,9 @@ export function HomePage() {
                   type="button"
                   disabled={starting || recActive}
                   onClick={() => void handleStartRecording()}
-                  className="h-10 px-5 rounded-[10px] text-[13px] font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] active:scale-[0.97] text-white inline-flex items-center gap-1.5 cursor-pointer transition-[background-color,transform] duration-150 disabled:opacity-55"
+                  className="h-10 px-5 rounded-[10px] text-sm leading-[22px] font-medium bg-[var(--rec)] hover:bg-[var(--rec-hover)] active:scale-[0.97] text-white inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer transition-[background-color,transform] duration-150 disabled:opacity-55"
                 >
-                  <span className="w-2 h-2 rounded-full bg-white" aria-hidden="true" />
+                  <span className="w-2 h-2 rounded-full bg-white shrink-0" aria-hidden="true" />
                   <span>{starting ? "启动中…" : "开始录音"}</span>
                 </button>
               </div>
@@ -868,16 +872,19 @@ export function HomePage() {
           <Disclosure open={optionsOpen}>
             <div className="pt-4">
               <div className="pt-4 border-t border-[var(--line-2)] space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label htmlFor="homeNumSpk" className="block text-[12px] text-[var(--text-2)] mb-1">
+                    <label
+                      htmlFor="homeNumSpk"
+                      className="block text-xs leading-[18px] font-medium text-[var(--text-2)] mb-1.5"
+                    >
                       参会人数
                     </label>
                     <select
                       id="homeNumSpk"
                       value={numSpk}
                       onChange={(e) => setNumSpk(Number(e.target.value))}
-                      className="w-full h-9 px-3 text-[13px]"
+                      className="w-full h-9 px-3 rounded-[8px] text-[13px] leading-[20px]"
                     >
                       <option value={0}>自动判断</option>
                       {[2, 3, 4, 5, 6, 7, 8, 10, 12].map((n) => (
@@ -889,14 +896,17 @@ export function HomePage() {
                   </div>
 
                   <div>
-                    <label htmlFor="homeTpl" className="block text-[12px] text-[var(--text-2)] mb-1">
+                    <label
+                      htmlFor="homeTpl"
+                      className="block text-xs leading-[18px] font-medium text-[var(--text-2)] mb-1.5"
+                    >
                       默认纪要模板
                     </label>
                     <select
                       id="homeTpl"
                       value={template}
                       onChange={(e) => setTemplate(e.target.value)}
-                      className="w-full h-9 px-3 text-[13px]"
+                      className="w-full h-9 px-3 rounded-[8px] text-[13px] leading-[20px]"
                     >
                       {templates.map(([k, label]) => (
                         <option key={k} value={k}>
@@ -906,8 +916,11 @@ export function HomePage() {
                     </select>
                   </div>
 
-                  <div>
-                    <label htmlFor="homeHotword" className="block text-[12px] text-[var(--text-2)] mb-1">
+                  <div className="sm:col-span-2">
+                    <label
+                      htmlFor="homeHotword"
+                      className="block text-xs leading-[18px] font-medium text-[var(--text-2)] mb-1.5"
+                    >
                       本场热词 / 人名
                     </label>
                     <input
@@ -916,14 +929,16 @@ export function HomePage() {
                       value={hotword}
                       onChange={(e) => setHotword(e.target.value)}
                       placeholder="例如：张伟 季度复盘 OKR"
-                      className="w-full h-9 px-3 text-[13px]"
+                      className="w-full h-9 px-3 rounded-[8px] text-[13px] leading-[20px]"
                     />
                   </div>
                 </div>
 
-                <div className="text-[11.5px] text-[var(--muted)]">
+                <div className="text-xs leading-[18px] text-[var(--muted)]">
                   全局快捷键：
-                  <kbd className="font-mono bg-[var(--fill)] px-1.5 py-0.5 rounded">{markShortcut}</kbd>{" "}
+                  <kbd className="font-mono text-[11px] leading-[14px] bg-[var(--fill)] text-[var(--text-2)] px-1.5 py-0.5 rounded-[4px]">
+                    {markShortcut}
+                  </kbd>{" "}
                   随时打点
                 </div>
               </div>
@@ -932,11 +947,13 @@ export function HomePage() {
         </section>
 
         <section
-          className="lg:col-span-5 rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 flex flex-col justify-between gap-4"
+          className="lg:col-span-5 rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 flex flex-col justify-between gap-4"
           aria-label="记录节奏图表"
         >
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">记录节奏</h2>
+            <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+              记录节奏
+            </h2>
             <SegmentedControl
               size="xs"
               value={trendRange}
@@ -952,11 +969,11 @@ export function HomePage() {
             />
           </div>
 
-          <div className="flex items-baseline justify-between gap-2 min-h-[30px]">
-            <span className="text-[22px] font-semibold tracking-tight text-[var(--text)] num">
+          <div className="flex items-baseline justify-between gap-2 min-h-[32px]">
+            <span className="text-[24px] leading-[32px] font-semibold tracking-[-0.02em] text-[var(--text)] num whitespace-nowrap shrink-0">
               {inspectedBucket ? fmtDur(inspectedBucket.dur) : fmtDur(periodStats.dur)}
             </span>
-            <span className="text-xs text-[var(--muted)] num">
+            <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
               {inspectedBucket
                 ? `${inspectedBucket.sublabel} · ${inspectedBucket.count} 场`
                 : `${trendRange === "7d" ? "近 7 天" : "近 4 周"} · ${periodStats.count} 场`}
@@ -974,25 +991,28 @@ export function HomePage() {
         </section>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 xl:gap-6 items-start">
         <div className="lg:col-span-7 space-y-6">
           <section
-            className="rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 space-y-4"
+            className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 space-y-4"
             aria-label={showTodayTimeline ? "今日脉络" : "最近记录"}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-[var(--text)] m-0">
+                <h2 className="text-[15px] leading-[22px] font-semibold tracking-[-0.01em] text-[var(--text)] m-0 whitespace-nowrap shrink-0">
                   {showTodayTimeline ? "今日脉络" : "最近记录"}
                 </h2>
                 {timelineSource.length > 0 && (
-                  <span className="rounded-full bg-[var(--fill)] px-2 py-0.5 text-[11px] text-[var(--muted)] num">
+                  <span className="rounded-full bg-[var(--fill)] px-2 py-0.5 text-xs leading-[16px] text-[var(--muted)] num whitespace-nowrap shrink-0">
                     {timelineSource.length} 场
                   </span>
                 )}
                 {isTodayRecording && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-[var(--red-weak)] text-[var(--red)] px-2 py-0.5 text-[11px] font-medium">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--red)] rec-dot" aria-hidden="true" />
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--danger-soft)] text-[var(--danger)] px-2.5 py-0.5 text-xs leading-[16px] font-medium whitespace-nowrap shrink-0">
+                    <span
+                      className="w-1.5 h-1.5 rounded-full bg-[var(--danger)] rec-dot shrink-0"
+                      aria-hidden="true"
+                    />
                     记录中
                   </span>
                 )}
@@ -1004,9 +1024,9 @@ export function HomePage() {
                     type="button"
                     disabled={backfilling}
                     onClick={() => void handleBackfillBriefs()}
-                    className="btn-ghost rounded-[8px] px-2.5 h-7 text-xs inline-flex items-center gap-1 cursor-pointer"
+                    className="btn-ghost rounded-[8px] px-2.5 h-8 text-[13px] leading-[20px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <Wand2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <Wand2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                     <span>{backfilling ? "起名中…" : "智能起名"}</span>
                   </button>
                 )}
@@ -1014,29 +1034,34 @@ export function HomePage() {
                   <button
                     type="button"
                     onClick={() => navigate(`#/day/${todayStr}`)}
-                    className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs inline-flex items-center gap-1 cursor-pointer"
+                    className="btn-secondary rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     <span>{dailyButtonLabel}</span>
-                    <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                   </button>
                 )}
               </div>
             </div>
 
             {hasDaySummaryMd && dayData?.summary && (
-              <div className="rounded-[12px] bg-[var(--fill)] px-4 py-3 space-y-2">
-                <div className="max-h-[168px] overflow-hidden [mask-image:linear-gradient(to_bottom,#000_76%,transparent)]">
-                  <MarkdownView markdown={dayData.summary.markdown} className="text-[13px]" />
+              <div className="rounded-[12px] bg-[var(--surface-2)] px-4 py-3.5 space-y-2.5">
+                <div className="max-h-[184px] overflow-hidden [mask-image:linear-gradient(to_bottom,#000_76%,transparent)]">
+                  <MarkdownView markdown={dayData.summary.markdown} />
                 </div>
-                <div className="flex items-center justify-between text-[11px] text-[var(--muted)] num">
-                  <span>
+                <div className="flex items-center justify-between gap-2 text-xs leading-[18px] text-[var(--muted)] num">
+                  <span className="min-w-0 truncate">
                     今日日报 · {dayData.summary.model || dayData.summary.provider || "AI 汇总"}
-                    {dayData.summary.created ? ` · ${hm(dayData.summary.created)}` : ""}
+                    {dayData.summary.created ? (
+                      <>
+                        {" · "}
+                        <span className="num-mono">{hm(dayData.summary.created)}</span>
+                      </>
+                    ) : null}
                   </span>
                   <button
                     type="button"
                     onClick={() => navigate(`#/day/${todayStr}`)}
-                    className="btn-ghost rounded px-1.5 h-6 text-[11px] text-[var(--text-2)] cursor-pointer"
+                    className="btn-ghost rounded-[6px] px-2 h-7 text-xs leading-[18px] font-medium text-[var(--text-2)] hover:text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     展开全文
                   </button>
@@ -1045,79 +1070,88 @@ export function HomePage() {
             )}
 
             {!visibleTimeline.length ? (
-              <div className="py-10 text-center text-xs text-[var(--muted)]">
+              <div className="py-10 text-center text-[13px] leading-[20px] text-[var(--muted)]">
                 暂无会议记录，在上方输入标题开始录音，或直接拖放音视频文件进来
               </div>
             ) : (
-              <div className="relative pl-4 space-y-1">
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-[4.5px] top-4 bottom-4 w-px bg-[var(--line-2)]"
-                />
-                {visibleTimeline.map((m) => {
-                  const spkCnt = namedSpeakerCount(m);
-                  const suggestCnt = Object.keys(m.speaker_meta?.suggest || {}).length;
-                  const timeLabel = m.clock_start
-                    ? `${m.clock_start}${m.clock_end ? `–${m.clock_end}` : ""}`
-                    : `${(m.created || "").slice(5, 10)} ${hm(m.created)}`;
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => navigate(`#/m/${m.id}`)}
-                      className="relative w-full py-3 px-3 rounded-[12px] text-left hover:bg-[var(--fill)] transition-colors flex items-start gap-3 cursor-pointer"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="absolute -left-[15px] top-[18px] w-[7px] h-[7px] rounded-full ring-2 ring-[var(--surface)]"
-                        style={{ backgroundColor: sourceDotColor(m.source) }}
-                      />
-                      <span className="font-mono text-[11.5px] text-[var(--muted)] num shrink-0 min-w-[78px] pt-0.5">
-                        {timeLabel}
-                      </span>
-                      <span className="flex-1 min-w-0 block space-y-1">
-                        <span className="block text-[14px] font-medium text-[var(--text)] truncate">
-                          {m.title || "未命名会议"}
+              <div className={timelineExpanded ? "max-h-[480px] overflow-y-auto pr-1" : undefined}>
+                <div className="relative pl-4 space-y-1">
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-[4.5px] top-4 bottom-4 w-px bg-[var(--line-2)]"
+                  />
+                  {visibleTimeline.map((m) => {
+                    const spkCnt = namedSpeakerCount(m);
+                    const suggestCnt = Object.keys(m.speaker_meta?.suggest || {}).length;
+                    const timeLabel = m.clock_start
+                      ? `${m.clock_start}${m.clock_end ? `–${m.clock_end}` : ""}`
+                      : `${(m.created || "").slice(5, 10)} ${hm(m.created)}`;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => navigate(`#/m/${m.id}`)}
+                        className="relative w-full py-3 px-3 rounded-[10px] text-left hover:bg-[var(--fill)] transition-colors flex items-start gap-3 cursor-pointer"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="absolute -left-[15px] top-[19px] w-[7px] h-[7px] rounded-full ring-2 ring-[var(--surface)]"
+                          style={{ backgroundColor: sourceDotColor(m.source) }}
+                        />
+                        <span className="num-mono text-xs leading-[22px] text-[var(--muted)] shrink-0 min-w-[84px]">
+                          {timeLabel}
                         </span>
-                        {(m.brief || (m.tags && m.tags.length > 0)) && (
-                          <span className="flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--text-2)]">
-                            {m.brief && <span className="truncate max-w-[340px]">{m.brief}</span>}
-                            {(m.tags || []).slice(0, 2).map((tag) => (
-                              <span
-                                key={tag}
-                                className="rounded bg-[var(--fill)] px-1.5 py-0 text-[10.5px] text-[var(--muted)] shrink-0"
-                              >
-                                #{tag}
-                              </span>
-                            ))}
+                        <span className="flex-1 min-w-0 block space-y-1">
+                          <span className="block text-sm leading-[22px] font-medium text-[var(--text)] truncate">
+                            {m.title || "未命名会议"}
                           </span>
-                        )}
-                      </span>
-                      <span className="flex items-center gap-1.5 shrink-0 pt-0.5">
-                        {m.status === "recording" && (
-                          <span className="rounded-full bg-[var(--red-weak)] text-[var(--red)] px-2 py-0.5 text-[11px] font-medium">
-                            录音中
+                          {(m.brief || (m.tags && m.tags.length > 0)) && (
+                            <span className="flex flex-wrap items-center gap-1.5 text-[13px] leading-[20px] text-[var(--text-2)]">
+                              {m.brief && <span className="truncate max-w-[340px]">{m.brief}</span>}
+                              {(m.tags || []).slice(0, 2).map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="rounded-[6px] bg-[var(--fill)] px-1.5 py-0 text-xs leading-[18px] text-[var(--muted)] shrink-0"
+                                >
+                                  #{tag}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </span>
+                        <span className="flex items-center gap-1.5 shrink-0 pt-0.5">
+                          {m.status === "recording" && (
+                            <span className="rounded-full bg-[var(--danger-soft)] text-[var(--danger)] px-2 py-0.5 text-xs leading-[16px] font-medium whitespace-nowrap shrink-0">
+                              录音中
+                            </span>
+                          )}
+                          {(m.status === "queued" || m.status === "transcribing") && (
+                            <span className="rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2 py-0.5 text-xs leading-[16px] font-medium whitespace-nowrap shrink-0">
+                              {m.status === "queued" ? "排队中" : "转写中"}
+                            </span>
+                          )}
+                          {suggestCnt > 0 && (
+                            <span className="rounded-full bg-[var(--fill)] text-[var(--text-2)] px-2 py-0.5 text-xs leading-[16px] font-medium whitespace-nowrap shrink-0">
+                              待认人
+                            </span>
+                          )}
+                          {spkCnt > 0 && (
+                            <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                              {spkCnt}人
+                            </span>
+                          )}
+                          <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                            {fmtDur(effDuration(m))}
                           </span>
-                        )}
-                        {(m.status === "queued" || m.status === "transcribing") && (
-                          <span className="rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2 py-0.5 text-[11px] font-medium">
-                            {m.status === "queued" ? "排队中" : "转写中"}
-                          </span>
-                        )}
-                        {suggestCnt > 0 && (
-                          <span className="rounded-full bg-[var(--fill)] text-[var(--text-2)] px-2 py-0.5 text-[11px]">
-                            待认人
-                          </span>
-                        )}
-                        {spkCnt > 0 && (
-                          <span className="text-[11.5px] text-[var(--muted)] num">{spkCnt}人</span>
-                        )}
-                        <span className="text-xs text-[var(--muted)] num">{fmtDur(effDuration(m))}</span>
-                        <ChevronRight className="w-3.5 h-3.5 text-[var(--muted)]" aria-hidden="true" />
-                      </span>
-                    </button>
-                  );
-                })}
+                          <ChevronRight
+                            className="w-3.5 h-3.5 text-[var(--muted)] shrink-0"
+                            aria-hidden="true"
+                          />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -1126,61 +1160,18 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => setTimelineExpanded((v) => !v)}
-                  className="btn-ghost rounded-[8px] px-3 h-7 text-xs cursor-pointer"
+                  className="btn-ghost rounded-[8px] px-3 h-8 text-[13px] leading-[20px] whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   {timelineExpanded ? "收起时间线" : `展开全部 ${timelineSource.length} 场`}
                 </button>
               </div>
             )}
           </section>
-
-          {meetings.length > 0 && (
-            <section
-              className="rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 space-y-4"
-              aria-label="记录构成与活跃专题"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">记录构成</h2>
-                <span className="text-xs text-[var(--muted)] num">累计 {meetings.length} 场</span>
-              </div>
-
-              <CompositionBar segments={sourceSegments} />
-
-              {projects.length > 0 && (
-                <div className="pt-3 border-t border-[var(--line-2)] space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-[var(--text-2)]">活跃专题</span>
-                    <button
-                      type="button"
-                      onClick={() => navigate("#/projects")}
-                      className="btn-ghost rounded-[7px] px-2 h-6 text-[11.5px] inline-flex items-center gap-0.5 cursor-pointer"
-                    >
-                      <span>查看脉络</span>
-                      <ChevronRight className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {projects.slice(0, 4).map((pr) => (
-                      <button
-                        key={pr.id}
-                        type="button"
-                        onClick={() => navigate("#/projects")}
-                        className="min-h-[30px] rounded-[9px] bg-[var(--fill)] hover:bg-[var(--fill-2)] px-3 py-1 text-xs text-[var(--text)] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
-                      >
-                        <span className="font-medium truncate max-w-[140px]">{pr.name}</span>
-                        <span className="text-[11px] text-[var(--muted)] num">{pr.meeting_count} 场</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
         </div>
 
         <div className="lg:col-span-5 space-y-6">
           <section
-            className="rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 space-y-4"
+            className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 space-y-4"
             aria-label="待跟进事项"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1197,10 +1188,10 @@ export function HomePage() {
               <button
                 type="button"
                 onClick={() => navigate("#/todos")}
-                className="btn-ghost rounded-[8px] px-2.5 h-7 text-xs inline-flex items-center gap-1 cursor-pointer"
+                className="btn-ghost rounded-[8px] px-2 h-8 text-[13px] leading-[20px] inline-flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <span>全部</span>
-                <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+                <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               </button>
             </div>
 
@@ -1232,7 +1223,7 @@ export function HomePage() {
 
             {todoTab === "todos" ? (
               !openTodoList.length ? (
-                <p className="text-[13px] text-[var(--muted)] m-0 py-2">
+                <p className="text-[13px] leading-[20px] text-[var(--muted)] m-0 py-2">
                   暂无未完待办，会议行动项会自动汇总于此
                 </p>
               ) : (
@@ -1252,10 +1243,10 @@ export function HomePage() {
                                 type="checkbox"
                                 checked={it.done}
                                 onChange={(e) => void toggleHomeTodo(it, e.target.checked)}
-                                className="mt-0.5"
+                                className="mt-[3px] shrink-0"
                               />
                               <span
-                                className={`text-[13px] leading-snug transition-colors duration-150 ${
+                                className={`text-sm leading-[22px] transition-colors duration-150 ${
                                   it.done ? "line-through text-[var(--muted)]" : "text-[var(--text)]"
                                 }`}
                               >
@@ -1268,10 +1259,10 @@ export function HomePage() {
                                 onClick={() =>
                                   navigate(`#/m/${it.mid}${it.ts ? `?t=${Math.max(0, tsToSec(it.ts))}` : ""}`)
                                 }
-                                className="btn-ghost rounded-[6px] px-1.5 h-6 text-[11.5px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 min-w-0 cursor-pointer"
+                                className="btn-ghost rounded-[6px] px-1.5 h-7 text-xs leading-[18px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 min-w-0 cursor-pointer"
                               >
                                 <span className="truncate">{it.meeting_title || "来源会议"}</span>
-                                {it.ts && <span className="font-mono num shrink-0">[{it.ts}]</span>}
+                                {it.ts && <span className="num-mono shrink-0">[{it.ts}]</span>}
                               </button>
                             </div>
                           </div>
@@ -1282,7 +1273,9 @@ export function HomePage() {
                 </div>
               )
             ) : !openCommitList.length ? (
-              <p className="text-[13px] text-[var(--muted)] m-0 py-2">近 14 天暂无待跟进的口头承诺</p>
+              <p className="text-[13px] leading-[20px] text-[var(--muted)] m-0 py-2">
+                近 14 天暂无待跟进的口头承诺
+              </p>
             ) : (
               <div className="space-y-2.5">
                 {openCommitList.map((c) => {
@@ -1301,10 +1294,10 @@ export function HomePage() {
                                 type="checkbox"
                                 checked={c.done}
                                 onChange={(e) => void toggleHomeCommitment(c, e.target.checked)}
-                                className="mt-0.5"
+                                className="mt-[3px] shrink-0"
                               />
                               <span
-                                className={`text-[13px] leading-snug transition-colors duration-150 ${
+                                className={`text-sm leading-[22px] transition-colors duration-150 ${
                                   c.done ? "line-through text-[var(--muted)]" : "text-[var(--text)]"
                                 }`}
                               >
@@ -1315,23 +1308,23 @@ export function HomePage() {
                               type="button"
                               onClick={() => void dismissHomeCommitment(c)}
                               aria-label="忽略承诺"
-                              className="btn-ghost rounded w-[26px] h-[26px] flex items-center justify-center text-[var(--muted)] shrink-0 cursor-pointer"
+                              className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center text-[var(--muted)] shrink-0 cursor-pointer"
                             >
-                              <X className="w-3 h-3" aria-hidden="true" />
+                              <X className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
                           </div>
-                          <div className="pl-6 flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <div className="pl-6 flex flex-wrap items-center gap-1.5 text-xs leading-[18px]">
                             <span
-                              className={`rounded-full px-2 py-0 font-medium ${
+                              className={`rounded-full px-2 py-0.5 font-medium whitespace-nowrap shrink-0 ${
                                 c.direction === "mine"
                                   ? "bg-[var(--surface)] text-[var(--text-2)]"
-                                  : "bg-[var(--amber-weak)] text-[var(--amber)]"
+                                  : "bg-[var(--warn-soft)] text-[var(--warn)]"
                               }`}
                             >
                               {c.direction === "mine" ? "我答应" : "等对方"}
                             </span>
                             {c.overdue && (
-                              <span className="rounded-full bg-[var(--amber-weak)] text-[var(--amber)] px-2 py-0 font-medium num">
+                              <span className="rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2 py-0.5 font-medium num whitespace-nowrap shrink-0">
                                 超过 3 天未跟进
                               </span>
                             )}
@@ -1343,10 +1336,10 @@ export function HomePage() {
                                   `#/m/${c.mid}?t=${Math.max(0, Math.floor((c.start_ms || 0) / 1000))}`,
                                 )
                               }
-                              className="btn-ghost rounded-[6px] px-1.5 h-6 text-[11px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 min-w-0 cursor-pointer ml-auto"
+                              className="btn-ghost rounded-[6px] px-1.5 h-7 text-xs leading-[18px] text-[var(--muted)] hover:text-[var(--text)] inline-flex items-center gap-1 min-w-0 cursor-pointer ml-auto"
                             >
                               <span className="truncate max-w-[120px]">{c.meeting_title}</span>
-                              {c.ts && <span className="font-mono num shrink-0">[{c.ts}]</span>}
+                              {c.ts && <span className="num-mono shrink-0">[{c.ts}]</span>}
                             </button>
                           </div>
                         </div>
@@ -1359,22 +1352,26 @@ export function HomePage() {
           </section>
 
           <section
-            className="rounded-[18px] bg-[var(--surface)] shadow-[var(--shadow-1)] border border-[var(--line-2)] p-6 space-y-4"
+            className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 space-y-4"
             aria-label="人物快捷入口"
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">人物与发言</h2>
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                  人物与发言
+                </h2>
                 {people.length > 0 && (
-                  <span className="text-xs text-[var(--muted)] num">{people.length} 位</span>
+                  <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                    {people.length} 位
+                  </span>
                 )}
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1 shrink-0">
                 {clusters.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setVpWizardOpen(true)}
-                    className="btn-primary rounded-[8px] px-2.5 h-7 text-xs cursor-pointer"
+                    className="h-7 px-2.5 text-xs leading-[18px] rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                   >
                     批量认人
                   </button>
@@ -1382,10 +1379,10 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => navigate("#/people")}
-                  className="btn-ghost rounded-[8px] px-2.5 h-7 text-xs inline-flex items-center gap-1 cursor-pointer"
+                  className="btn-ghost rounded-[8px] px-1.5 -mr-1.5 h-7 text-xs leading-[18px] inline-flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <span>管理与修改</span>
-                  <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+                  <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -1395,29 +1392,29 @@ export function HomePage() {
                 <div className="space-y-1.5">
                   {topPeople.map((p, idx) => {
                     const ratio = Math.max(0.1, Math.min(1, Number(p.total_s || 0) / maxPersonSec));
-                    const barColor = CHART_COLORS[idx % CHART_COLORS.length];
+                    const barOpacity = SPEAKER_BAR_OPACITIES[idx] ?? 0.28;
                     return (
                       <button
                         key={p.name}
                         type="button"
                         onClick={() => navigate(`#/people/${encodeURIComponent(p.name)}`)}
-                        className="w-full rounded-[12px] px-3 py-2.5 text-left hover:bg-[var(--fill)] transition-colors space-y-2 cursor-pointer"
+                        className="w-full rounded-[10px] px-3 py-2.5 text-left hover:bg-[var(--fill)] transition-colors space-y-2 cursor-pointer"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="w-6 h-6 rounded-full bg-[var(--ink)] text-[var(--ink-inv)] inline-flex items-center justify-center text-[11px] font-semibold shrink-0">
+                            <span className="w-6 h-6 rounded-full bg-[var(--ink)] text-[var(--ink-fg)] inline-flex items-center justify-center text-xs leading-none font-semibold shrink-0">
                               {p.name.slice(0, 1)}
                             </span>
-                            <span className="text-[13px] font-medium text-[var(--text)] truncate">
+                            <span className="text-sm leading-[20px] font-medium text-[var(--text)] truncate">
                               {p.name}
                             </span>
                             {p.has_voiceprint && (
-                              <span className="rounded-full bg-[var(--green-weak)] text-[var(--green)] px-1.5 py-0 text-[10.5px] font-medium shrink-0">
+                              <span className="rounded-full bg-[var(--ok-soft)] text-[var(--ok)] px-2 py-0.5 text-xs leading-[16px] font-medium whitespace-nowrap shrink-0">
                                 声纹
                               </span>
                             )}
                           </div>
-                          <span className="text-[11.5px] text-[var(--muted)] num shrink-0">
+                          <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
                             {p.meetings} 场 · {fmtDur(p.total_s)}
                           </span>
                         </div>
@@ -1426,10 +1423,10 @@ export function HomePage() {
                           aria-hidden="true"
                         >
                           <div
-                            className="h-full w-full origin-left rounded-full mn-chart-anim transition-transform duration-300"
+                            className="h-full w-full origin-left rounded-full bg-[var(--ink)] mn-chart-anim transition-transform duration-300"
                             style={{
                               transform: `scaleX(${ratio.toFixed(3)})`,
-                              backgroundColor: barColor,
+                              opacity: barOpacity,
                             }}
                           />
                         </div>
@@ -1437,7 +1434,7 @@ export function HomePage() {
                     );
                   })}
                 </div>
-                <p className="text-[11.5px] text-[var(--muted)] m-0">
+                <p className="text-xs leading-[18px] text-[var(--muted)] m-0">
                   点任一人物可查看参会记录，直接改名、合并或纠正认错场次
                 </p>
               </>
@@ -1445,17 +1442,68 @@ export function HomePage() {
               <button
                 type="button"
                 onClick={() => setVpWizardOpen(true)}
-                className="w-full rounded-[12px] bg-[var(--fill)] hover:bg-[var(--fill-2)] px-4 py-3 text-left text-xs text-[var(--text)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                className="w-full rounded-[12px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-4 py-3 text-left text-[13px] leading-[20px] text-[var(--text)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
               >
                 <span className="num">发现 {clusters.length} 位常见声音，点此批量认人</span>
                 <ChevronRight className="w-3.5 h-3.5 text-[var(--muted)] shrink-0" aria-hidden="true" />
               </button>
             ) : (
-              <p className="text-[12.5px] text-[var(--muted)] m-0">
+              <p className="text-[13px] leading-[20px] text-[var(--muted)] m-0">
                 在转写稿中命名说话人后，这里会展示发言时长对比与快捷纠错入口
               </p>
             )}
           </section>
+
+          {meetings.length > 0 && (
+            <section
+              className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-5 xl:p-6 space-y-4"
+              aria-label="记录构成与活跃专题"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                  记录构成
+                </h2>
+                <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                  累计 {meetings.length} 场
+                </span>
+              </div>
+
+              <CompositionBar segments={sourceSegments} />
+
+              {projects.length > 0 && (
+                <div className="pt-3 border-t border-[var(--line-2)] space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[13px] leading-[20px] font-medium text-[var(--text-2)] whitespace-nowrap shrink-0">
+                      活跃专题
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigate("#/projects")}
+                      className="btn-ghost rounded-[6px] px-2 h-7 text-xs leading-[18px] inline-flex items-center gap-0.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <span>查看脉络</span>
+                      <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {projects.slice(0, 4).map((pr) => (
+                      <button
+                        key={pr.id}
+                        type="button"
+                        onClick={() => navigate("#/projects")}
+                        className="h-8 rounded-[8px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-3 text-[13px] leading-[20px] text-[var(--text)] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        <span className="font-medium truncate max-w-[140px]">{pr.name}</span>
+                        <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                          {pr.meeting_count} 场
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
         </div>
       </div>
 
@@ -1465,24 +1513,28 @@ export function HomePage() {
         label="智能识别建议"
         widthClass="w-full max-w-[440px]"
       >
-        <div className="px-5 py-4 border-b border-[var(--line-2)] flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-[15px] font-semibold text-[var(--text)] m-0">智能识别建议</h2>
-            <p className="text-xs text-[var(--muted)] mt-0.5 m-0">处理完后会自动收起，不占用首页工作区</p>
+        <div className="px-6 py-4 border-b border-[var(--line-2)] flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap">
+              智能识别建议
+            </h2>
+            <p className="text-xs leading-[18px] text-[var(--muted)] mt-0.5 m-0">
+              处理完后会自动收起，不占用首页工作区
+            </p>
           </div>
           <button
             type="button"
             onClick={() => setInsightsOpen(false)}
             aria-label="关闭智能识别建议"
-            className="btn-ghost rounded-[7px] w-[28px] h-[28px] flex items-center justify-center cursor-pointer shrink-0"
+            className="btn-ghost rounded-[6px] w-7 h-7 flex items-center justify-center cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
           {insightCount === 0 ? (
-            <div className="py-12 text-center text-xs text-[var(--muted)]">
+            <div className="py-12 text-center text-[13px] leading-[20px] text-[var(--muted)]">
               当前暂无待处理的建议，稍后有新发现会在这里提醒。
             </div>
           ) : (
@@ -1490,10 +1542,10 @@ export function HomePage() {
               {clusters.length > 0 && (
                 <div className="rounded-[12px] bg-[var(--fill)] px-4 py-3 flex flex-wrap items-center justify-between gap-2.5">
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-[var(--text)] num">
+                    <div className="text-sm leading-[22px] font-medium text-[var(--text)] num">
                       发现 {clusters.length} 位跨会议重复出现的未命名声音
                     </div>
-                    <div className="text-[11.5px] text-[var(--muted)]">
+                    <div className="text-xs leading-[18px] text-[var(--muted)] mt-0.5">
                       试听 5 秒即可批量给多场记录一次认人
                     </div>
                   </div>
@@ -1503,7 +1555,7 @@ export function HomePage() {
                       setInsightsOpen(false);
                       setVpWizardOpen(true);
                     }}
-                    className="btn-primary rounded-[8px] px-3 h-7 text-xs shrink-0 cursor-pointer"
+                    className="rounded-[8px] px-3 h-8 text-xs leading-[18px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] whitespace-nowrap shrink-0 cursor-pointer transition-colors"
                   >
                     批量认人
                   </button>
@@ -1516,21 +1568,23 @@ export function HomePage() {
                 return (
                   <div
                     key={`${c.from}-${c.to}`}
-                    className="rounded-[12px] bg-[var(--fill)] px-4 py-3 space-y-2 text-[13px]"
+                    className="rounded-[12px] bg-[var(--fill)] px-4 py-3 space-y-2 text-sm leading-[22px]"
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate">
                         发现候选纠错：<span className="text-[var(--muted)]">{c.from}</span> →{" "}
-                        <b className="text-[var(--text)]">{c.to}</b>
+                        <span className="font-semibold text-[var(--text)]">{c.to}</span>
                       </span>
-                      <span className="text-[11px] text-[var(--muted)] num shrink-0">{c.count ?? 1} 次</span>
+                      <span className="text-xs leading-[18px] text-[var(--muted)] num whitespace-nowrap shrink-0">
+                        {c.count ?? 1} 次
+                      </span>
                     </div>
                     <div className="flex items-center justify-end gap-1.5">
                       <button
                         type="button"
                         disabled={busyAction === keyAcc || busyAction === keyDis}
                         onClick={() => void handleVocabCandidate(c.from, c.to, false)}
-                        className="btn-ghost rounded-[7px] px-2.5 h-7 text-xs cursor-pointer"
+                        className="btn-ghost rounded-[8px] px-2.5 h-7 text-xs leading-[18px] whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         忽略
                       </button>
@@ -1538,7 +1592,7 @@ export function HomePage() {
                         type="button"
                         disabled={busyAction === keyAcc || busyAction === keyDis}
                         onClick={() => void handleVocabCandidate(c.from, c.to, true)}
-                        className="btn-secondary rounded-[7px] px-2.5 h-7 text-xs font-medium cursor-pointer"
+                        className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         采纳规则
                       </button>
@@ -1550,10 +1604,10 @@ export function HomePage() {
               {seedMeeting && clusters.length === 0 && (
                 <div className="rounded-[12px] bg-[var(--fill)] px-4 py-3 flex items-center justify-between gap-2.5">
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-[var(--text)]">
+                    <div className="text-sm leading-[22px] font-medium text-[var(--text)]">
                       命名 1 场常驻同事即可启用声纹自动认人
                     </div>
-                    <div className="text-[11.5px] text-[var(--muted)] truncate num">
+                    <div className="text-xs leading-[18px] text-[var(--muted)] truncate num mt-0.5">
                       推荐从「{seedMeeting.title || "未命名会议"}」（{fmtDur(effDuration(seedMeeting))}）开始
                     </div>
                   </div>
@@ -1563,7 +1617,7 @@ export function HomePage() {
                       setInsightsOpen(false);
                       navigate(`#/m/${seedMeeting.id}`);
                     }}
-                    className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs shrink-0 cursor-pointer"
+                    className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     去命名
                   </button>
@@ -1571,8 +1625,8 @@ export function HomePage() {
               )}
 
               {conflictCount > 0 && !seedMeeting && (
-                <div className="rounded-[12px] bg-[var(--amber-weak)] px-4 py-3 flex items-center justify-between gap-2">
-                  <span className="text-xs text-[var(--amber)] font-medium num">
+                <div className="rounded-[12px] bg-[var(--warn-soft)] px-4 py-3 flex items-center justify-between gap-2">
+                  <span className="text-[13px] leading-[20px] text-[var(--warn)] font-medium num">
                     发现 {conflictCount} 条声纹冲突待确认
                   </span>
                   <button
@@ -1581,7 +1635,7 @@ export function HomePage() {
                       setInsightsOpen(false);
                       openSettingsTab("rsi");
                     }}
-                    className="btn-secondary rounded-[7px] px-2.5 h-7 text-xs cursor-pointer"
+                    className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     去处理
                   </button>
@@ -1590,9 +1644,10 @@ export function HomePage() {
 
               {highValueDiscarded.map((d) => (
                 <div key={d.id} className="rounded-[12px] bg-[var(--fill)] px-4 py-3 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="font-mono text-[var(--muted)] num">
-                      短片段回收站 · {hm(d.time)} · {Math.round(d.voiced_s)}秒
+                  <div className="flex items-center justify-between gap-2 text-xs leading-[18px]">
+                    <span className="text-[var(--muted)] num">
+                      短片段回收站 · <span className="num-mono">{hm(d.time)}</span> · {Math.round(d.voiced_s)}
+                      秒
                     </span>
                     <button
                       type="button"
@@ -1601,13 +1656,13 @@ export function HomePage() {
                         setInsightsOpen(false);
                         void handleRestoreDiscarded(d.id);
                       }}
-                      className="btn-secondary rounded-[7px] px-2.5 h-7 text-xs inline-flex items-center gap-1 cursor-pointer"
+                      className="btn-secondary rounded-[8px] px-2.5 h-7 text-xs leading-[18px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
                     >
-                      <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                      <RotateCcw className="w-3 h-3 shrink-0" aria-hidden="true" />
                       <span>恢复并转写</span>
                     </button>
                   </div>
-                  <p className="text-xs text-[var(--text-2)] m-0 line-clamp-2">{d.text}</p>
+                  <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0 line-clamp-2">{d.text}</p>
                 </div>
               ))}
 
@@ -1618,7 +1673,7 @@ export function HomePage() {
                     setInsightsOpen(false);
                     openSettingsTab("rsi");
                   }}
-                  className="w-full rounded-[12px] bg-[var(--fill)] hover:bg-[var(--fill-2)] px-4 py-2.5 text-left text-xs text-[var(--text-2)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
+                  className="w-full rounded-[12px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] px-4 py-3 text-left text-[13px] leading-[20px] text-[var(--text-2)] flex items-center justify-between gap-2 cursor-pointer transition-colors"
                 >
                   <span className="truncate">
                     {rsi?.ambient?.advice?.warning ||
@@ -1631,17 +1686,17 @@ export function HomePage() {
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-[var(--line-2)] flex justify-end">
+        <div className="px-6 py-3.5 border-t border-[var(--line-2)] flex justify-end">
           <button
             type="button"
             onClick={() => {
               setInsightsOpen(false);
               openSettingsTab("rsi");
             }}
-            className="btn-ghost rounded-[8px] px-3 h-8 text-xs inline-flex items-center gap-1 cursor-pointer"
+            className="btn-ghost rounded-[8px] px-3 h-8 text-[13px] leading-[20px] inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <span>前往词库与声纹设置</span>
-            <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+            <ChevronRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
           </button>
         </div>
       </DrawerShell>

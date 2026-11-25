@@ -27,7 +27,7 @@ function renderInlines(segments: InlineSegment[], keyPrefix: string, onSeekSec?:
         return (
           <span
             key={k}
-            className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded bg-[var(--fill)] text-[var(--text-2)] font-mono text-[11.5px] num align-baseline"
+            className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded-[6px] bg-[var(--fill)] text-[var(--text-2)] text-xs leading-[18px] num-mono whitespace-nowrap align-baseline"
           >
             {seg.label}
           </span>
@@ -38,7 +38,7 @@ function renderInlines(segments: InlineSegment[], keyPrefix: string, onSeekSec?:
           key={k}
           type="button"
           onClick={() => onSeekSec(tsToSec(seg.label))}
-          className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded bg-[var(--fill)] hover:bg-[var(--fill-2)] text-[var(--link)] font-mono text-[11.5px] num cursor-pointer align-baseline"
+          className="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded-[6px] bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)] text-xs leading-[18px] num-mono whitespace-nowrap cursor-pointer transition-colors align-baseline"
           title={`跳到 ${seg.label} 播放`}
         >
           {seg.label}
@@ -58,14 +58,14 @@ function renderList(
 ) {
   const Tag = node.ordered ? "ol" : "ul";
   return (
-    <Tag key={keyPrefix} className="space-y-1">
+    <Tag key={keyPrefix}>
       {node.items.map((item, idx) => {
         const itemKey = `${keyPrefix}-${idx}`;
         const isTodo = item.todoIdx !== null;
         return (
           <li
             key={itemKey}
-            className={`${isTodo ? "list-none -ml-4 flex items-start gap-2" : ""} ${
+            className={`${isTodo ? "list-none -ml-5 flex items-start gap-2.5" : ""} ${
               isTodo && item.todoDone ? "line-through text-[var(--muted)]" : ""
             }`}
           >
@@ -80,7 +80,7 @@ function renderList(
                   }
                 }}
                 aria-label="完成待办"
-                className={`mt-1 w-3.5 h-3.5 shrink-0 ${interactiveTodo ? "cursor-pointer" : "cursor-default"}`}
+                className={`mt-[5px] shrink-0 ${interactiveTodo ? "cursor-pointer" : "cursor-default"}`}
               />
             )}
             <div className="flex-1 min-w-0">
@@ -114,7 +114,7 @@ function renderBlock(
       return <h4 key={k}>{renderInlines(block.inlines, k, onSeekSec)}</h4>;
     }
     case "hr":
-      return <hr key={k} className="my-3 border-[var(--line-2)]" />;
+      return <hr key={k} />;
     case "code":
       return (
         <pre key={k}>
@@ -136,7 +136,7 @@ function renderBlock(
       );
     case "table":
       return (
-        <div key={k} className="overflow-x-auto my-2">
+        <div key={k} className="md-table-wrap">
           <table>
             <thead>
               <tr>

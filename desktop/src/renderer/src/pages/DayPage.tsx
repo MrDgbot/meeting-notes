@@ -87,35 +87,35 @@ export function DayPage({ date }: { date: string }) {
   const activeSummaryMd = genText || data?.summary?.markdown || "";
 
   return (
-    <div className="max-w-4xl mx-auto px-5 py-6 space-y-5">
+    <div className="max-w-[960px] mx-auto px-7 sm:px-9 py-7 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => navigate(`#/day/${shiftDate(date, -1)}`)}
             aria-label="前一天"
-            className="btn-secondary rounded-lg p-1.5 cursor-pointer"
+            className="btn-secondary rounded-[8px] w-8 h-8 inline-flex items-center justify-center cursor-pointer"
           >
-            <ChevronLeft className="w-4 h-4" />
+            <ChevronLeft className="w-4 h-4" aria-hidden="true" />
           </button>
-          <h1 className="text-xl font-semibold m-0 inline-flex items-center gap-2 num">
-            <Calendar className="w-5 h-5 text-[var(--muted)]" />
-            <span>{date}</span>
+          <h1 className="text-[24px] leading-[34px] font-semibold tracking-[-0.02em] text-[var(--text)] m-0 inline-flex items-center gap-2 whitespace-nowrap shrink-0">
+            <Calendar className="w-5 h-5 text-[var(--muted)] shrink-0" aria-hidden="true" />
+            <span className="num">{date}</span>
           </h1>
           <button
             type="button"
             disabled={isTodayOrFuture}
             onClick={() => navigate(`#/day/${shiftDate(date, 1)}`)}
             aria-label="后一天"
-            className="btn-secondary rounded-lg p-1.5 cursor-pointer"
+            className="btn-secondary rounded-[8px] w-8 h-8 inline-flex items-center justify-center cursor-pointer"
           >
-            <ChevronRight className="w-4 h-4" />
+            <ChevronRight className="w-4 h-4" aria-hidden="true" />
           </button>
           {date !== todayStr && (
             <button
               type="button"
               onClick={() => navigate(`#/day/${todayStr}`)}
-              className="btn-ghost rounded-lg px-2.5 h-7 text-xs cursor-pointer"
+              className="btn-ghost rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
             >
               回到今天
             </button>
@@ -133,7 +133,7 @@ export function DayPage({ date }: { date: string }) {
                 value={activeProv}
                 onChange={(e) => setSelectedProv(e.target.value)}
                 disabled={generating}
-                className="text-xs px-2.5 py-1.5"
+                className="h-9 rounded-[10px] text-sm leading-[22px] px-3 bg-[var(--surface-elev)] border border-[var(--line)] hover:border-[var(--line-focus)] focus:border-[var(--line-focus)]"
               >
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -148,12 +148,12 @@ export function DayPage({ date }: { date: string }) {
             type="button"
             disabled={generating || !data?.meetings.length}
             onClick={() => void handleGenerateSummary()}
-            className="btn-primary rounded-lg px-3.5 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+            className="h-9 px-4 rounded-[10px] text-sm leading-[22px] font-medium bg-[var(--ink)] hover:bg-[var(--ink-hover)] text-[var(--ink-fg)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 active:scale-[0.98]"
           >
             {generating ? (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
             ) : (
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-4 h-4" aria-hidden="true" />
             )}
             <span>
               {generating ? genStatus || "生成中…" : data?.summary ? "重新生成日报" : "生成每日总结"}
@@ -163,21 +163,25 @@ export function DayPage({ date }: { date: string }) {
       </div>
 
       {loading ? (
-        <div className="card-surface p-5 space-y-3">
+        <div className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-6 space-y-3">
           <SkeletonLines lines={5} />
         </div>
       ) : error ? (
-        <div className="rounded-xl bg-[var(--red-weak)] text-[var(--red)] p-4 text-sm">{error}</div>
+        <div className="rounded-[12px] bg-[var(--danger-soft)] text-[var(--danger)] px-4 py-3.5 text-sm leading-[22px]">
+          {error}
+        </div>
       ) : (
         <>
           {data?.summary_stale && (
-            <div className="rounded-xl bg-[var(--amber-weak)] text-[var(--amber)] px-4 py-2.5 text-xs flex items-center justify-between gap-2">
-              <span>当日新增或更新了 {data.summary_stale.new} 条记录，建议更新今日日报。</span>
+            <div className="rounded-[12px] bg-[var(--warn-soft)] text-[var(--warn)] px-4 py-3 text-[13px] leading-[20px] flex items-center justify-between gap-3">
+              <span className="num">
+                当日新增或更新了 {data.summary_stale.new} 条记录，建议更新今日日报。
+              </span>
               <button
                 type="button"
                 disabled={generating}
                 onClick={() => void handleGenerateSummary()}
-                className="btn-secondary rounded-lg px-2.5 py-1 text-xs cursor-pointer shrink-0"
+                className="btn-secondary rounded-[8px] px-3 h-8 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
               >
                 立即更新
               </button>
@@ -185,30 +189,32 @@ export function DayPage({ date }: { date: string }) {
           )}
 
           {data?.auto_error && (
-            <div className="rounded-xl bg-[var(--red-weak)] px-4 py-2.5 text-xs text-[var(--red)]">
+            <div className="rounded-[12px] bg-[var(--danger-soft)] px-4 py-3 text-[13px] leading-[20px] text-[var(--danger)]">
               自动生成日报遇到问题：{data.auto_error.error}
             </div>
           )}
 
-          <section className="card-surface p-5">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <h2 className="text-sm font-semibold m-0">AI 每日总结</h2>
+          <section className="rounded-[16px] bg-[var(--surface)] shadow-[var(--shadow-1)] p-6">
+            <div className="flex items-center justify-between gap-3 pb-3.5 mb-4 border-b border-[var(--line-2)]">
+              <h2 className="text-base leading-[24px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                AI 每日总结
+              </h2>
               {activeSummaryMd && !generating && (
-                <CopyButton text={activeSummaryMd} label="复制日报" successToast="已复制每日总结" />
+                <CopyButton text={activeSummaryMd} label="复制日报" successToast="已复制每日总结" size="sm" />
               )}
             </div>
             {activeSummaryMd ? (
               <>
                 <MarkdownView markdown={activeSummaryMd} />
                 {!genText && data?.summary && (
-                  <div className="mt-4 pt-3 border-t border-[var(--line-2)] text-xs text-[var(--muted)] num">
+                  <div className="mt-5 pt-3.5 border-t border-[var(--line-2)] text-xs leading-[18px] text-[var(--muted)] num">
                     {data.summary.model || data.summary.provider} · 涵盖 {data.summary.meetings.length} 场 ·{" "}
                     {data.summary.cost}s
                   </div>
                 )}
               </>
             ) : (
-              <div className="py-6 text-xs text-[var(--muted)]">
+              <div className="py-8 text-sm leading-[22px] text-[var(--muted)]">
                 {data?.meetings.length
                   ? "点击右上角「生成每日总结」，把这一天的会议与对话整理成结构化日报。"
                   : "这一天还没有会议记录。"}
@@ -216,25 +222,32 @@ export function DayPage({ date }: { date: string }) {
             )}
           </section>
 
-          <section className="space-y-2">
-            <div className="text-xs font-medium text-[var(--muted)] num">
-              当日记录 · {data?.meetings.length || 0} 场 · 累计 {fmtDur(totalSec)}
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-[15px] leading-[22px] font-semibold text-[var(--text)] m-0 whitespace-nowrap shrink-0">
+                当日记录
+              </h2>
+              <span className="text-xs leading-[18px] font-medium text-[var(--muted)] whitespace-nowrap shrink-0 num">
+                {data?.meetings.length || 0} 场 · 累计 {fmtDur(totalSec)}
+              </span>
             </div>
             {(data?.meetings || []).map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => navigate(`#/m/${m.id}`)}
-                className="w-full card-surface card-interactive p-3.5 text-left hover:bg-[var(--btn-hover)] flex items-center justify-between gap-3 cursor-pointer"
+                className="w-full rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] card-interactive px-4 py-3.5 text-left hover:shadow-[var(--shadow-2)] flex items-center justify-between gap-3 cursor-pointer"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{m.title || "未命名会议"}</div>
-                  <div className="text-xs text-[var(--muted)] mt-0.5 num">
+                  <div className="text-sm leading-[22px] font-medium text-[var(--text)] truncate">
+                    {m.title || "未命名会议"}
+                  </div>
+                  <div className="text-xs leading-[18px] text-[var(--muted)] mt-0.5 num">
                     {hm(m.created)} · {fmtDur(effDuration(m))}
                   </div>
                 </div>
                 {STATUS_LABELS[m.status] && (
-                  <span className="text-xs px-2 py-0.5 rounded bg-[var(--fill)] text-[var(--text-2)]">
+                  <span className="text-xs leading-[18px] font-medium px-2.5 py-0.5 rounded-full bg-[var(--fill)] text-[var(--text-2)] whitespace-nowrap shrink-0">
                     {STATUS_LABELS[m.status]}
                   </span>
                 )}

@@ -14,7 +14,7 @@ const SUGGESTED_QUESTIONS = [
   "帮我写一封会后跟进邮件",
 ];
 
-export function QaPane({ meeting }: { meeting: MeetingDetail }) {
+export function QaPane({ meeting, isSplit = false }: { meeting: MeetingDetail; isSplit?: boolean }) {
   const settings = useAppStore((s) => s.settings);
   const ensureSettings = useAppStore((s) => s.ensureSettings);
   const provId = useAppStore((s) => s.provId);
@@ -32,7 +32,7 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
   const [streamAnswer, setStreamAnswer] = useState("");
   const [streamError, setStreamError] = useState("");
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const listBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,36 +125,36 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-3">
+    <div className={`space-y-4 ${isSplit ? "" : "max-w-[820px] mx-auto"}`}>
+      <div className="space-y-4">
         {(meeting.qa || []).map((item, idx) => (
-          <div key={`${item.t}-${idx}`} className="space-y-1.5">
+          <div key={`${item.t}-${idx}`} className="space-y-2.5">
             <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[var(--ink)] text-[var(--ink-inv)] px-3.5 py-2 text-sm">
+              <div className="max-w-[85%] rounded-[16px] rounded-tr-[6px] bg-[var(--fill)] text-[var(--text)] px-4 py-2.5 text-[15px] leading-[26px] whitespace-pre-wrap">
                 {item.q}
               </div>
             </div>
-            <div className="card-surface p-3.5">
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-5 py-4">
               <MarkdownView markdown={item.a} onSeekSec={(sec) => requestSeek(sec * 1000, true)} />
             </div>
           </div>
         ))}
 
         {pendingQ && (
-          <div className="space-y-1.5">
+          <div className="space-y-2.5">
             <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-[var(--ink)] text-[var(--ink-inv)] px-3.5 py-2 text-sm">
+              <div className="max-w-[85%] rounded-[16px] rounded-tr-[6px] bg-[var(--fill)] text-[var(--text)] px-4 py-2.5 text-[15px] leading-[26px] whitespace-pre-wrap">
                 {pendingQ}
               </div>
             </div>
-            <div className="card-surface p-3.5">
+            <div className="rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-5 py-4">
               {streamError ? (
-                <div className="text-sm text-[var(--red)]">{streamError}</div>
+                <div className="text-sm leading-[22px] text-[var(--danger)]">{streamError}</div>
               ) : streamAnswer ? (
                 <MarkdownView markdown={streamAnswer} onSeekSec={(sec) => requestSeek(sec * 1000, true)} />
               ) : (
-                <div className="space-y-2 py-0.5">
-                  <div className="text-xs text-[var(--muted)]">正在检索相关讨论…</div>
+                <div className="space-y-2.5 py-0.5">
+                  <div className="text-[13px] leading-[20px] text-[var(--muted)]">正在检索相关讨论…</div>
                   <SkeletonLines lines={2} />
                 </div>
               )}
@@ -165,7 +165,7 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
       </div>
 
       {!hasTranscript && !meeting.qa.length ? (
-        <div className="rounded-xl bg-[var(--fill)] px-4 py-6 text-center text-xs text-[var(--muted)]">
+        <div className="rounded-[12px] bg-[var(--surface-2)] px-4 py-6 text-center text-[13px] leading-[20px] text-[var(--muted)]">
           完成录音或转写后，即可针对这场会议向 AI 提问。
         </div>
       ) : !meeting.qa.length && !pendingQ ? (
@@ -175,7 +175,7 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
               key={q}
               type="button"
               onClick={() => void handleSend(q)}
-              className="btn-secondary rounded-full px-3 py-1.5 text-xs cursor-pointer"
+              className="btn-secondary rounded-full h-8 px-3.5 text-[13px] leading-[20px] text-[var(--text-2)] hover:text-[var(--text)] whitespace-nowrap shrink-0 cursor-pointer"
             >
               {q}
             </button>
@@ -183,36 +183,16 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
         </div>
       ) : null}
 
-      <div className="card-surface p-2.5 flex flex-wrap items-center gap-2">
-        {providers.length > 1 && (
-          <>
-            <label htmlFor="qaProvSel" className="sr-only">
-              问答使用的模型
-            </label>
-            <select
-              id="qaProvSel"
-              value={activeProv}
-              onChange={(e) => setProvId(e.target.value)}
-              className="text-xs px-2.5 py-1.5 max-w-[170px]"
-            >
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
-
-        <input
+      <div className="rounded-[16px] bg-[var(--surface-elev)] border border-[var(--line)] focus-within:border-[var(--line-focus)] shadow-[var(--shadow-2)] px-3.5 pt-3 pb-2.5 transition-[border-color,box-shadow] duration-150">
+        <textarea
           ref={inputRef}
           id="qIn"
-          type="text"
+          rows={2}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           disabled={!hasTranscript}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void handleSend();
             }
@@ -225,30 +205,56 @@ export function QaPane({ meeting }: { meeting: MeetingDetail }) {
                 : "就这场会议提问，例如：张伟负责哪些事？"
           }
           aria-label="向 AI 提问"
-          className="flex-1 min-w-[200px] px-3 py-1.5 text-sm"
+          className="w-full resize-none border-0 bg-transparent hover:bg-transparent focus:bg-transparent focus:border-transparent focus:shadow-none focus:ring-0 p-0 text-[15px] leading-[26px] text-[var(--text-body)] placeholder:text-[var(--muted)] outline-none"
         />
 
-        <button
-          type="button"
-          disabled={sending || !input.trim() || !hasTranscript}
-          onClick={() => void handleSend()}
-          className="btn-primary rounded-lg px-3.5 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>发送</span>
-        </button>
+        <div className="mt-2 pt-2 border-t border-[var(--line-2)] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            {providers.length > 1 && (
+              <>
+                <label htmlFor="qaProvSel" className="sr-only">
+                  问答使用的模型
+                </label>
+                <select
+                  id="qaProvSel"
+                  value={activeProv}
+                  onChange={(e) => setProvId(e.target.value)}
+                  className="h-8 rounded-[8px] text-[13px] leading-[20px] px-2.5 min-w-0 shrink max-w-[190px]"
+                >
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
 
-        {meeting.qa.length > 0 && (
-          <InlineConfirm
-            triggerLabel="清空"
-            triggerTitle="清空问答记录"
-            triggerIcon={<Trash2 className="w-3.5 h-3.5" aria-hidden="true" />}
-            triggerClassName="btn-ghost btn-danger rounded-lg px-2.5 py-1.5 text-xs"
-            message={`清空这场会议的 ${meeting.qa.length} 条问答记录？`}
-            confirmLabel="清空"
-            onConfirm={handleClear}
-          />
-        )}
+            {meeting.qa.length > 0 && (
+              <InlineConfirm
+                triggerLabel="清空"
+                triggerTitle="清空问答记录"
+                triggerIcon={<Trash2 className="w-3.5 h-3.5" aria-hidden="true" />}
+                triggerClassName="btn-ghost btn-danger rounded-[8px] h-8 px-2.5 text-[13px] leading-[20px]"
+                align="left"
+                message={`清空这场会议的 ${meeting.qa.length} 条问答记录？`}
+                confirmLabel="清空"
+                onConfirm={handleClear}
+              />
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={sending || !input.trim() || !hasTranscript}
+            onClick={() => void handleSend()}
+            aria-label="发送问题"
+            className="rounded-full h-8 px-3.5 bg-[var(--ink)] hover:bg-[var(--ink-hover)] active:scale-[0.96] text-[var(--ink-fg)] text-[13px] leading-[20px] font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-[background-color,transform,opacity] duration-150"
+          >
+            <Send className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span>发送</span>
+          </button>
+        </div>
       </div>
     </div>
   );

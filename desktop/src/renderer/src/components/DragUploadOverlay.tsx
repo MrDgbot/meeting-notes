@@ -110,37 +110,39 @@ export function DragUploadOverlay() {
   return (
     <div
       data-state={state}
-      className="mn-backdrop fixed inset-0 z-[70] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6 pointer-events-auto"
+      className="mn-backdrop fixed inset-0 z-[70] bg-[var(--backdrop)] backdrop-blur-[4px] flex items-center justify-center p-6 pointer-events-auto"
       onClick={() => {
         if (dragging) setDragging(false);
       }}
     >
       <div
         data-state={state}
-        className="mn-dialog rounded-2xl border-2 border-dashed border-[var(--link)] bg-[var(--surface-elev)] px-10 py-8 text-center max-w-md w-full shadow-[var(--shadow-pop)]"
+        className="mn-dialog rounded-[16px] border-2 border-dashed border-[var(--ink)]/35 bg-[var(--surface-elev)] px-10 py-8 text-center max-w-md w-full shadow-[var(--shadow-3)]"
       >
         {doneMark ? (
-          <Check className="w-10 h-10 mx-auto text-[var(--green)] mb-3" />
+          <Check className="w-10 h-10 mx-auto text-[var(--ok)] mb-3" />
         ) : (
-          <Upload className="w-10 h-10 mx-auto text-[var(--link)] mb-3" />
+          <Upload className="w-10 h-10 mx-auto text-[var(--ink)] mb-3" />
         )}
         {doneMark ? (
-          <div className="text-base font-semibold">导入完成</div>
+          <div className="text-base leading-[24px] font-semibold text-[var(--text)]">导入完成</div>
         ) : uploadPct !== null ? (
           <>
-            <div className="text-base font-semibold">正在导入音视频…</div>
+            <div className="text-base leading-[24px] font-semibold text-[var(--text)]">正在导入音视频…</div>
             <div className="mt-3 h-2 rounded-full bg-[var(--fill)] overflow-hidden">
               <div
-                className="h-full w-full origin-left bg-[var(--link)] transition-transform duration-150"
+                className="h-full w-full origin-left bg-[var(--ink)] transition-transform duration-150"
                 style={{ transform: `scaleX(${(pct / 100).toFixed(3)})` }}
               />
             </div>
-            <div className="mt-1.5 text-xs text-[var(--muted)] num">{pct}%</div>
+            <div className="mt-2 text-xs leading-[18px] text-[var(--muted)] num">{pct}%</div>
           </>
         ) : (
           <>
-            <div className="text-base font-semibold">松开即可导入并转写</div>
-            <p className="mt-1 text-xs text-[var(--muted)]">
+            <div className="text-base leading-[24px] font-semibold text-[var(--text)]">
+              松开即可导入并转写
+            </div>
+            <p className="mt-1.5 text-[13px] leading-[20px] text-[var(--text-2)]">
               支持 MP3 / WAV / M4A / MP4 / MOV 等常见音视频文件（按 Esc 取消）
             </p>
           </>

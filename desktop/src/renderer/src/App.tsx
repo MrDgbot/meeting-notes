@@ -256,7 +256,7 @@ export function App() {
               onClick={() => setSideCollapsed(false)}
               aria-label="展开左侧边栏"
               title="展开侧栏 (⌘\)"
-              className="app-no-drag hidden md:inline-flex btn-ghost w-7 h-7 rounded-[7px] items-center justify-center text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer"
+              className="app-no-drag hidden md:inline-flex btn-ghost w-7 h-7 shrink-0 rounded-[6px] items-center justify-center text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer"
             >
               <PanelLeftOpen className="w-4 h-4" />
             </button>
@@ -267,7 +267,7 @@ export function App() {
               type="button"
               onClick={() => setNarrowNavOpen(true)}
               aria-label="打开导航栏"
-              className="app-no-drag md:hidden btn-ghost w-7 h-7 rounded-[7px] inline-flex items-center justify-center text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer"
+              className="app-no-drag md:hidden btn-ghost w-7 h-7 shrink-0 rounded-[6px] inline-flex items-center justify-center text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer"
             >
               <Menu className="w-4 h-4" />
             </button>
@@ -303,9 +303,9 @@ export function App() {
         label="退出确认"
         maxWidthClass="max-w-md"
       >
-        <div className="p-5 flex flex-col gap-3">
+        <div className="p-6 flex flex-col gap-4">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--amber-weak)] text-[var(--amber)]">
+            <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--warn-soft)] text-[var(--warn)]">
               {quitPhase === "saving" ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
@@ -313,22 +313,22 @@ export function App() {
               )}
             </span>
             <div className="min-w-0">
-              <h2 className="text-[15px] font-semibold text-[var(--text)]">
+              <h2 className="text-base leading-[24px] font-semibold text-[var(--text)]">
                 {quitPhase === "saving" ? "正在保存录音与笔记…" : "当前会议仍在录音中"}
               </h2>
-              <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">
+              <p className="mt-1.5 text-[13px] leading-[20px] text-[var(--text-2)]">
                 {quitPhase === "saving"
                   ? "正在收尾转写片段并写入本地记录，完成后会自动退出。"
                   : "直接退出可能丢失最近数秒的语音缓存。选择「停止并退出」会先完整保存当前录音和笔记。"}
               </p>
             </div>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex items-center justify-end gap-2 pt-1">
             <button
               type="button"
               disabled={quitPhase === "saving"}
               onClick={() => setQuitPhase("idle")}
-              className="btn-secondary rounded-[8px] px-3 py-1.5 text-xs cursor-pointer disabled:opacity-50"
+              className="btn-secondary rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
             >
               继续录音
             </button>
@@ -336,7 +336,7 @@ export function App() {
               type="button"
               disabled={quitPhase === "saving"}
               onClick={() => void handleConfirmQuit()}
-              className="rounded-[8px] px-3 py-1.5 text-xs font-medium bg-[#b91c1c] text-white hover:opacity-90 cursor-pointer disabled:opacity-60"
+              className="rounded-[8px] h-8 px-3.5 text-[13px] leading-[20px] font-medium whitespace-nowrap shrink-0 bg-[var(--danger)] hover:bg-[var(--rec-hover)] text-white transition-colors cursor-pointer disabled:opacity-60"
             >
               {quitPhase === "saving" ? "保存中…" : "停止并退出"}
             </button>
