@@ -81,6 +81,7 @@ nsis:
 linux:
   icon: build/icon.png
   executableName: meeting-notes
+  maintainer: MrDgbot <60038945+MrDgbot@users.noreply.github.com>
   category: AudioVideo;Office
   target:
     - target: AppImage
@@ -93,6 +94,7 @@ appImage:
   artifactName: "Meeting-Notes-${version}-${arch}.${ext}"
 deb:
   artifactName: "meeting-notes_${version}_${arch}.${ext}"
+  maintainer: MrDgbot <60038945+MrDgbot@users.noreply.github.com>
   depends: []
   recommends:
     - ffmpeg

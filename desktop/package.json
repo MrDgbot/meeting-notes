@@ -1,7 +1,11 @@
 {
   "name": "meeting-notes-desktop",
   "version": "0.1.0",
-  "author": "MrDgbot",
+  "author": {
+    "name": "MrDgbot",
+    "email": "60038945+MrDgbot@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/MrDgbot/meeting-notes",
   "repository": {
     "type": "git",
     "url": "https://github.com/MrDgbot/meeting-notes.git"

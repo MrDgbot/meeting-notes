@@ -147,7 +147,9 @@ jobs:
           mkdir -p release-assets mac-update-yml
           shopt -s nullglob
           for f in desktop/dist/*.dmg desktop/dist/*.zip desktop/dist/*.exe desktop/dist/*.AppImage desktop/dist/*.deb desktop/dist/*.blockmap desktop/dist/latest.yml desktop/dist/latest-linux.yml; do
-            cp -v "$f" release-assets/
+            if [ -f "$f" ]; then
+              cp -v "$f" release-assets/
+            fi
           done
           if [ -f desktop/dist/latest-mac.yml ]; then
             cp -v desktop/dist/latest-mac.yml mac-update-yml/
