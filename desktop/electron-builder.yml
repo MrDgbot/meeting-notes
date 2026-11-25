@@ -1,5 +1,6 @@
 appId: com.meetingnotes.desktop
 productName: Meeting Notes
+artifactName: "Meeting-Notes-${version}-${os}-${arch}.${ext}"
 protocols:
   - name: Meeting Notes
     schemes:
@@ -13,6 +14,12 @@ extraResources:
     to: trayTemplate@2x.png
   - from: build/icon.icns
     to: icon.icns
+  - from: build/icon.png
+    to: icon.png
+  - from: vendor/backend
+    to: backend
+  - from: vendor/bin
+    to: bin
 files:
   - out/**
   - "!**/.vscode/*"
@@ -21,6 +28,9 @@ files:
   - "!biome.json"
   - "!vitest.config.ts"
   - "!tsconfig*.json"
+  - "!scripts/*"
+  - "!vendor/*"
+  - "!.cache/*"
 mac:
   icon: build/icon.icns
   category: public.app-category.productivity
@@ -31,10 +41,54 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   target:
-    - target: dir
+    - target: dmg
       arch:
         - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
   extendInfo:
     NSMicrophoneUsageDescription: 会议记录需要访问麦克风，用于实时会议录音、全天对话记录和语音转写。
     NSScreenCaptureUsageDescription: 会议记录需要捕获电脑系统音频，用于双声道录制线上会议中对方的声音。
+dmg:
+  title: "Meeting Notes ${version}"
+win:
+  icon: build/icon.ico
+  verifyUpdateCodeSignature: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+nsis:
+  artifactName: "Meeting-Notes-${version}-win-${arch}-setup.${ext}"
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Meeting Notes
+  installerLanguages:
+    - zh_CN
+    - en_US
+linux:
+  icon: build/icon.png
+  executableName: meeting-notes
+  category: AudioVideo;Office
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+deb:
+  depends: []
+  recommends:
+    - ffmpeg
 npmRebuild: false
+buildDependenciesFromSource: false

@@ -5,6 +5,8 @@
       "**",
       "!**/out",
       "!**/dist",
+      "!**/vendor",
+      "!**/.cache",
       "!**/node_modules",
       "!**/build",
       "!src/renderer/public/pcm-worklet.js"

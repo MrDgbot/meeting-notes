@@ -12,4 +12,6 @@ tests/mobile/node_modules/
 desktop/node_modules/
 desktop/out/
 desktop/dist/
+desktop/vendor/
+desktop/.cache/
 desktop/*.tsbuildinfo

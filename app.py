@@ -2948,7 +2948,8 @@ def _stop_local_llm():
             try:
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
-                                   capture_output=True, timeout=10)
+                                   capture_output=True, timeout=10,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 else:
                     p.kill()
             except Exception:  # noqa: BLE001
@@ -3007,7 +3008,7 @@ async def local_llm_action(request: Request, body: dict = Body(...)):
                 raise HTTPException(400, "未找到本地大模型启动脚本，请先完成本地模型部署")
             port = re.search(r":(\d+)", _local_url().split("//", 1)[-1])
             env = {**os.environ, "PORT": port.group(1) if port else "8090"}
-            popen_kw: dict = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)} if os.name == "nt" else {"start_new_session": True}
+            popen_kw: dict = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {"start_new_session": True}
             try:
                 _llm["proc"] = await asyncio.to_thread(_start_local_llm, cmd, env, popen_kw)
             except OSError as e:

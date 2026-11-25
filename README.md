@@ -114,6 +114,22 @@ flowchart LR
 
 ## 快速开始
 
+### 方式一：下载桌面端安装包（开箱即用，推荐）
+
+直接前往 [Releases 页面](https://github.com/MrDgbot/meeting-notes/releases/latest) 下载对应系统的桌面端（Electron + React 原生客户端）：
+
+| 平台 | 推荐安装包 | 说明 |
+|---|---|---|
+| **macOS (Apple Silicon M 系列)** | `Meeting-Notes-*-mac-arm64.dmg` | 也提供 `.zip` |
+| **macOS (Intel)** | `Meeting-Notes-*-mac-x64.dmg` | 也提供 `.zip` |
+| **Windows (64-bit)** | `Meeting-Notes-*-win-x64-setup.exe` | 安装后可用，也提供便携 `.zip` |
+| **Linux (x86_64)** | `Meeting-Notes-*.AppImage` / `.deb` | 建议系统先装 PulseAudio / ffmpeg |
+
+- **无需手动配置仓库或虚拟环境**：安装包内已自带后端代码、`uv` 与 `ffmpeg`。首次打开会在界面中自动拉取 Python 3.11、安装依赖（默认提供国内清华 PyPI 加速源与官方源切换），并在首次转写时下载本地语音模型。
+- **未签名提示**：macOS 首次打开若被系统拦截，把应用拖入「应用程序」后运行 `xattr -cr "/Applications/Meeting Notes.app"`（或右键 → 打开）；Windows 若弹出 SmartScreen，点「更多信息 → 仍要运行」。
+
+### 方式二：从源码运行（网页端 / 二次开发）
+
 **环境**
 
 - macOS（Apple Silicon，主要开发和实测平台）、Linux、Windows 都能跑；没有 GPU 时用 CPU，转写会慢很多。各平台的细节见 [使用说明](docs/guide.md#启动)

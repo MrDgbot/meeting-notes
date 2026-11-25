@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { IPC } from "@shared/ipc";
-import type { DesktopRuntimeInfo, ThemeMode } from "@shared/types";
+import type { BootstrapMirror, DesktopRuntimeInfo, ThemeMode } from "@shared/types";
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import type { MeetingDetector } from "./meetingDetector";
 import type { QuickAskController } from "./quickAsk";
@@ -36,6 +36,14 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC.SIDECAR_STATUS, () => ctx.sidecar.getStatus());
   ipcMain.handle(IPC.SIDECAR_LOGS, () => ctx.sidecar.getLogs());
   ipcMain.handle(IPC.SIDECAR_RESTART, () => ctx.sidecar.restart());
+  ipcMain.handle(IPC.SIDECAR_RETRY_BOOTSTRAP, (_ev, rawMirror?: unknown) => {
+    const mirror: BootstrapMirror | undefined =
+      rawMirror === "cn" || rawMirror === "official" ? rawMirror : undefined;
+    if (mirror) {
+      writeDesktopConfig({ bootstrapMirror: mirror });
+    }
+    return ctx.sidecar.retryBootstrap(mirror);
+  });
 
   ipcMain.handle(IPC.SHELL_OPEN_DATA_DIR, async () => {
     const dataDir = ctx.sidecar.getStatus().dataDir;

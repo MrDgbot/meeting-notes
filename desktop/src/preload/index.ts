@@ -1,5 +1,6 @@
 import { IPC } from "@shared/ipc";
 import type {
+  BootstrapMirror,
   DesktopAPI,
   DetectedMeetingApp,
   QuickMarkPayload,
@@ -26,6 +27,7 @@ const desktopAPI: DesktopAPI = {
   getSidecarStatus: () => ipcRenderer.invoke(IPC.SIDECAR_STATUS),
   getSidecarLogs: () => ipcRenderer.invoke(IPC.SIDECAR_LOGS),
   restartSidecar: () => ipcRenderer.invoke(IPC.SIDECAR_RESTART),
+  retryBootstrap: (mirror?: BootstrapMirror) => ipcRenderer.invoke(IPC.SIDECAR_RETRY_BOOTSTRAP, mirror),
   openDataDir: () => ipcRenderer.invoke(IPC.SHELL_OPEN_DATA_DIR),
   revealMeeting: (mid) => ipcRenderer.invoke(IPC.SHELL_REVEAL_MEETING, mid),
   openExternal: (url) => ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url),

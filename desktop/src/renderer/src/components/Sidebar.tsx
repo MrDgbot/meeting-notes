@@ -171,6 +171,13 @@ export function Sidebar() {
 
   const statusMeta = (() => {
     if (sidecarStatus && sidecarStatus.phase !== "running") {
+      if (sidecarStatus.phase === "bootstrapping") {
+        return {
+          dot: "bg-[var(--amber)] animate-pulse",
+          text: "初始化环境中…",
+          title: sidecarStatus.bootstrap?.message || "正在准备本机语音运行环境（点击查看日志）",
+        };
+      }
       if (sidecarStatus.phase === "starting") {
         return {
           dot: "bg-[var(--amber)] animate-pulse",

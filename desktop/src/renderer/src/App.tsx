@@ -1,6 +1,7 @@
 import { AlertTriangle, Loader2, Menu, PanelLeftOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AmbientIntroModal } from "@/components/AmbientIntroModal";
+import { BootstrapOverlay } from "@/components/BootstrapOverlay";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DragUploadOverlay } from "@/components/DragUploadOverlay";
 import { ModalShell } from "@/components/MotionPrimitives";
@@ -293,6 +294,7 @@ export function App() {
       <VoiceprintWizardModal />
       <TrashModal />
       <DragUploadOverlay />
+      <BootstrapOverlay />
       <ModalShell
         open={quitPhase === "prompt" || quitPhase === "saving"}
         onClose={() => {

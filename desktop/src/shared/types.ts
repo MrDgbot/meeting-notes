@@ -482,10 +482,21 @@ export interface SpeakerNamesResponse {
   cost: number;
 }
 
-export type SidecarPhase = "stopped" | "starting" | "running" | "error" | "stopping";
+export type SidecarPhase = "stopped" | "bootstrapping" | "starting" | "running" | "error" | "stopping";
+
+export type BootstrapMirror = "cn" | "official";
+
+export interface BootstrapProgress {
+  stage: "python" | "deps" | "verify" | "starting";
+  percent: number;
+  message: string;
+  mirror: BootstrapMirror;
+  isUpgrade: boolean;
+}
 
 export interface SidecarStatus {
   phase: SidecarPhase;
+  mode?: "repo" | "standalone";
   pid: number | null;
   port: number | null;
   backendDir: string | null;
@@ -494,6 +505,7 @@ export interface SidecarStatus {
   error: string;
   restarts: number;
   startedAt: number | null;
+  bootstrap?: BootstrapProgress | null;
 }
 
 export interface SidecarLogEntry {
@@ -659,6 +671,7 @@ export interface DesktopAPI {
   getSidecarStatus: () => Promise<SidecarStatus>;
   getSidecarLogs: () => Promise<SidecarLogEntry[]>;
   restartSidecar: () => Promise<SidecarStatus>;
+  retryBootstrap: (mirror?: BootstrapMirror) => Promise<SidecarStatus>;
   openDataDir: () => Promise<boolean>;
   revealMeeting: (mid: string) => Promise<boolean>;
   openExternal: (url: string) => Promise<boolean>;

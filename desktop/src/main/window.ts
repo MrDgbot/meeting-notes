@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ThemeMode } from "@shared/types";
+import type { BootstrapMirror, ThemeMode } from "@shared/types";
 import { app, BrowserWindow, desktopCapturer, nativeTheme, screen, shell } from "electron";
 
 interface WindowBounds {
@@ -13,6 +13,7 @@ interface WindowBounds {
 export interface DesktopConfig {
   backendDir?: string;
   themeMode?: ThemeMode;
+  bootstrapMirror?: BootstrapMirror;
 }
 
 const DEFAULT_BOUNDS: WindowBounds = { width: 1320, height: 860 };
@@ -28,6 +29,9 @@ export function readDesktopConfig(): DesktopConfig {
       ...(typeof raw.backendDir === "string" ? { backendDir: raw.backendDir } : {}),
       ...(raw.themeMode === "auto" || raw.themeMode === "light" || raw.themeMode === "dark"
         ? { themeMode: raw.themeMode }
+        : {}),
+      ...(raw.bootstrapMirror === "cn" || raw.bootstrapMirror === "official"
+        ? { bootstrapMirror: raw.bootstrapMirror }
         : {}),
     };
   } catch {
@@ -98,6 +102,10 @@ export function createMainWindow(opts: {
   const savedCfg = readDesktopConfig();
   applyNativeThemeMode(savedCfg.themeMode ?? "auto");
 
+  const windowIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, "icon.png")
+    : path.join(import.meta.dirname, "../../build/icon.png");
+
   const b = loadBounds();
   const win = new BrowserWindow({
     width: b.width,
@@ -114,7 +122,10 @@ export function createMainWindow(opts: {
           titleBarStyle: "hiddenInset" as const,
           trafficLightPosition: { x: 14, y: 13 },
         }
-      : {}),
+      : {
+          autoHideMenuBar: true,
+          ...(fs.existsSync(windowIconPath) ? { icon: windowIconPath } : {}),
+        }),
     webPreferences: {
       preload: opts.preloadPath,
       contextIsolation: true,

@@ -222,10 +222,13 @@ def save_cfg(cfg: dict) -> dict:
 
 
 # ---------- 采音设备（按系统） ----------
+_NO_WIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if sys.platform == "win32" else {}
+
+
 def _ffmpeg(*args: str) -> subprocess.CompletedProcess | None:
     try:  # Windows 上设备名可能是中文：ffmpeg 输出 UTF-8，不按系统编码（GBK）解
         return subprocess.run(["ffmpeg", "-hide_banner", *args], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=15)
+                              encoding="utf-8", errors="replace", timeout=15, **_NO_WIN)
     except (OSError, subprocess.SubprocessError):  # 没装 ffmpeg
         return None
 
@@ -717,7 +720,7 @@ class Ambient:
         else:
             cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", *input_args(dev),
                    "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, **_NO_WIN)
         with self.lock:
             self.proc = proc
         self._cap += 1
@@ -855,7 +858,7 @@ class Ambient:
                 c = None
             if c is None:
                 # 标题只是占位（title_auto），生成纪要后会换成纪要里的标题
-                meta = store.create(title=datetime.fromtimestamp(wb).strftime("自动记录 %H:%M"), source="ambient",
+                meta = store.create(title=f"自动记录 {datetime.fromtimestamp(wb).strftime('%H:%M')}", source="ambient",
                                     status="recording", started_at=iso(wb), title_auto=True)  # 热词用词库里的常用热词
                 c = self.conv = Conv(meta["id"], open(store.mdir(meta["id"]) / "audio.pcm", "ab"), wb, wb)
                 store.save(c.mid, "skips.json", [])  # 有这个文件 = 新写法录的，跳点以它为准

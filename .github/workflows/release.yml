@@ -1,0 +1,177 @@
+name: Release Desktop Installers
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0); leave empty to build without publishing a GitHub Release"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: Structural invariants (INV001-INV010)
+        run: python3 scripts/check_invariants.py
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+      - name: Typecheck, lint, and unit tests
+        run: |
+          pnpm --dir desktop typecheck
+          pnpm --dir desktop lint
+          pnpm --dir desktop test
+
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: mac-arm64
+            os: macos-15
+            script: build:mac:arm64
+          - id: mac-x64
+            os: macos-15
+            script: build:mac:x64
+          - id: win-x64
+            os: windows-latest
+            script: build:win:x64
+          - id: linux-x64
+            os: ubuntu-latest
+            script: build:linux:x64
+    runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: Cache vendor binaries (uv & ffmpeg)
+        uses: actions/cache@v4
+        with:
+          path: desktop/.cache/vendor-dl
+          key: vendor-dl-${{ matrix.target.id }}-0.13.9-b6.1.1
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+      - name: Sync package version from tag
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          RAW_TAG="${TAG_INPUT:-$GITHUB_REF_NAME}"
+          if [[ "$RAW_TAG" == v* ]]; then
+            VER="${RAW_TAG#v}"
+            node -e '
+              const fs = require("fs");
+              const p = "desktop/package.json";
+              const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+              pkg.version = process.argv[1];
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+            ' "$VER"
+          fi
+      - name: Build installer (${{ matrix.target.id }})
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --dir desktop run ${{ matrix.target.script }}
+      - name: Collect release assets
+        shell: bash
+        run: |
+          rm -rf release-assets
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in desktop/dist/*.dmg desktop/dist/*.zip desktop/dist/*.exe desktop/dist/*.AppImage desktop/dist/*.deb; do
+            cp -v "$f" release-assets/
+          done
+          ls -lh release-assets
+          test -n "$(ls -A release-assets)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.target.id }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: ${{ github.ref_type == 'tag' || inputs.tag != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-release
+          pattern: release-assets-*
+          merge-multiple: true
+      - name: Generate SHA256SUMS and Release notes
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          TAG="${TAG_INPUT:-$GITHUB_REF_NAME}"
+          (cd dist-release && sha256sum * > SHA256SUMS.txt)
+          ls -lh dist-release
+          cat > release-notes.md <<'EOF'
+          ## 会议记录桌面端（开箱即用版）
+
+          所有安装包均已内置 Python 后端源码、`uv` 与 `ffmpeg`：
+          - 下载安装并打开桌面应用后，首次启动会自动完成 Python 3.11 与依赖环境初始化（默认支持国内清华 PyPI 加速源，可在界面中一键切换官方源）。
+          - 首次使用本地语音识别时，会自动下载语音模型到本地目录，音频与转写文件全程留在自己的电脑上。
+
+          ### 平台安装说明
+
+          | 平台 | 推荐安装包 | 便携包 / 备注 |
+          |---|---|---|
+          | **macOS (Apple Silicon M 系列)** | `*-mac-arm64.dmg` | `*-mac-arm64.zip` |
+          | **macOS (Intel)** | `*-mac-x64.dmg` | `*-mac-x64.zip` |
+          | **Windows (64-bit)** | `*-win-x64-setup.exe` | `*-win-x64.zip` |
+          | **Linux (x86_64)** | `*.AppImage` | `*-linux-amd64.deb`（或 `*-x64.deb`） |
+
+          ### 首次打开提示（未签名安装包）
+
+          - **macOS**：当前安装包尚未做 Apple 公证签名。首次打开若提示“已损坏”或“无法验证开发者”，拖入「应用程序」后在终端运行一次即可放行：
+            ```bash
+            xattr -cr "/Applications/Meeting Notes.app"
+            ```
+            或在「系统设置 → 隐私与安全性」底部点击「仍要打开」。
+          - **Windows**：若 Microsoft Defender SmartScreen 提示“Windows 已保护你的电脑”，点击 **更多信息 → 仍要运行** 即可。
+          - **Linux (AppImage)**：如提示无执行权限，先运行 `chmod +x Meeting-Notes-*.AppImage` 后双击或命令行启动。
+          EOF
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist-release/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Meeting Notes $RELEASE_TAG" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" dist-release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Meeting Notes $RELEASE_TAG" \
+              --notes-file release-notes.md
+          fi

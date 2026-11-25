@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { allocateFreePort, LogRingBuffer, resolveBackendDir, resolvePythonBin } from "../sidecar";
+import {
+  allocateFreePort,
+  LogRingBuffer,
+  resolveBackendDir,
+  resolvePythonBin,
+  resolveSidecarLayout,
+} from "../sidecar";
 
 const tempDirs: string[] = [];
 
@@ -76,5 +82,35 @@ describe("sidecar resolution & log buffering", () => {
     const mainEntry = fs.readFileSync(path.join(desktopDir, "src/main/index.ts"), "utf8");
     expect(viteCfg).toMatch(/format:\s*"cjs"/);
     expect(mainEntry).toContain("../preload/index.cjs");
+  });
+
+  it("selects standalone layout when packaged outside a dev repo checkout", () => {
+    const resDir = makeTempDir("mn-standalone-res-");
+    const userDir = makeTempDir("mn-standalone-user-");
+    const appDir = makeTempDir("mn-standalone-app-");
+
+    fs.mkdirSync(path.join(resDir, "backend"), { recursive: true });
+    fs.writeFileSync(path.join(resDir, "backend", "app.py"), "");
+    fs.writeFileSync(path.join(resDir, "backend", "pyproject.toml"), "");
+    fs.writeFileSync(path.join(resDir, "backend", "uv.lock"), "");
+    fs.mkdirSync(path.join(resDir, "bin"), { recursive: true });
+    fs.writeFileSync(path.join(resDir, "bin", "uv"), "");
+
+    const layout = resolveSidecarLayout({
+      appPath: appDir,
+      cwd: appDir,
+      resourcesPath: resDir,
+      userDataDir: userDir,
+      platform: "darwin",
+    });
+
+    expect(layout?.mode).toBe("standalone");
+    if (layout?.mode === "standalone") {
+      expect(layout.backendDir).toBe(path.join(resDir, "backend"));
+      expect(layout.uvBin).toBe(path.join(resDir, "bin", "uv"));
+      expect(layout.runtimeRoot).toBe(path.join(userDir, "runtime"));
+      expect(layout.dataDir).toBe(path.join(userDir, "data"));
+      expect(layout.modelsDir).toBe(path.join(userDir, "models"));
+    }
   });
 });

@@ -107,7 +107,14 @@ def _atomic_write(path: Path, writer, *, mode: int | None = None) -> None:
             fd = -1
             writer(f)
             f.flush()
-        os.replace(tmp, path)
+        for attempt in range(12):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 11:
+                    raise
+                time.sleep(0.005 * (attempt + 1))
     except BaseException:
         if fd >= 0:
             try:
@@ -192,7 +199,7 @@ def create(title: str = "", **fields) -> MeetingMeta:
         d.mkdir(parents=True)
         meta: MeetingMeta = {
             "id": mid,
-            "title": title.strip() or now.strftime("会议 %m-%d %H:%M"),
+            "title": title.strip() or f"会议 {now.strftime('%m-%d %H:%M')}",
             "title_auto": not title.strip(),
             "created": now.isoformat(timespec="seconds"),
             "status": "new",

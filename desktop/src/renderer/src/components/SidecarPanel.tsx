@@ -5,6 +5,7 @@ import { useAppStore } from "@/stores/appStore";
 
 const PHASE_LABELS: Record<string, string> = {
   running: "运行中",
+  bootstrapping: "初始化环境中…",
   starting: "启动中…",
   stopping: "正在停止…",
   stopped: "已停止",

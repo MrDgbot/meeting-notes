@@ -27,11 +27,15 @@ if (!gotLock) {
   app.quit();
 } else {
   const savedCfg = readDesktopConfig();
+  const defaultMirror =
+    savedCfg.bootstrapMirror ?? (app.getLocale().toLowerCase().startsWith("zh") ? "cn" : "official");
   const sidecar = new SidecarManager({
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     savedBackendDir: savedCfg.backendDir ?? null,
+    userDataDir: app.getPath("userData"),
+    defaultMirror,
   });
 
   const bridge = new LoopbackBridge({
@@ -116,7 +120,7 @@ if (!gotLock) {
   });
 
   sidecar.on("status", (st) => {
-    if (st.phase === "running" && st.backendDir) {
+    if (st.phase === "running" && st.backendDir && st.mode !== "standalone") {
       writeDesktopConfig({ backendDir: st.backendDir });
     }
     if (mainWindow && !mainWindow.isDestroyed()) {

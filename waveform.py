@@ -2,6 +2,7 @@
 import json
 import math
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -83,13 +84,16 @@ def levels(samples: np.ndarray, per: int) -> list[float]:
     return out
 
 
+_NO_WIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if sys.platform == "win32" else {}
+
+
 def compute(path: Path, duration_s: float) -> dict:
     bs = bucket_s(duration_s)
     per = max(1, int(RATE * bs))
     proc = subprocess.Popen(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path),
          "-ac", "1", "-ar", str(RATE), "-f", "s16le", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **_NO_WIN,
     )
     vals: list[float] = []
     dbs: list[float] = []

@@ -2,9 +2,17 @@ import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import type { SidecarLogEntry, SidecarPhase, SidecarStatus } from "@shared/types";
+import type {
+  BootstrapMirror,
+  BootstrapProgress,
+  SidecarLogEntry,
+  SidecarPhase,
+  SidecarStatus,
+} from "@shared/types";
+import { buildSidecarPath, resolveBundledPaths, runStandaloneBootstrap } from "./bootstrap";
 
 const MAX_LOGS = 500;
 const MAX_RESTARTS = 3;
@@ -48,6 +56,82 @@ export function resolveBackendDir(opts: {
     }
   }
   return null;
+}
+
+export type SidecarLayout =
+  | {
+      mode: "repo";
+      backendDir: string;
+      pythonBin: string;
+      dataDir: string;
+    }
+  | {
+      mode: "standalone";
+      backendDir: string;
+      uvBin: string;
+      bundledBinDir: string | null;
+      runtimeRoot: string;
+      dataDir: string;
+      modelsDir: string;
+    };
+
+export function resolveSidecarLayout(opts: {
+  appPath: string;
+  envDir?: string;
+  savedDir?: string | null;
+  cwd?: string;
+  resourcesPath?: string;
+  userDataDir?: string | null;
+  dataDirOverride?: string | null;
+  platform?: NodeJS.Platform;
+}): SidecarLayout | null {
+  const platform = opts.platform ?? process.platform;
+  const envData = process.env.MEETING_DATA?.trim();
+  const envModels = process.env.MODELSCOPE_CACHE?.trim();
+
+  const tryRepo = (dir: string | null | undefined): SidecarLayout | null => {
+    if (!dir?.trim()) return null;
+    const resolved = path.resolve(dir);
+    if (!isBackendRoot(resolved, platform)) return null;
+    const pythonBin = resolvePythonBin(resolved, platform);
+    if (!pythonBin) return null;
+    return {
+      mode: "repo",
+      backendDir: resolved,
+      pythonBin,
+      dataDir: opts.dataDirOverride || envData || path.join(resolved, "data"),
+    };
+  };
+
+  const explicit = tryRepo(opts.envDir);
+  if (explicit) return explicit;
+
+  for (const seed of [opts.cwd, opts.appPath].filter((x): x is string => Boolean(x?.trim()))) {
+    let cur = path.resolve(seed);
+    for (let depth = 0; depth < 8; depth++) {
+      const hit = tryRepo(cur);
+      if (hit) return hit;
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  }
+
+  const bundled = resolveBundledPaths(opts.resourcesPath, platform);
+  if (bundled) {
+    const userRoot = opts.userDataDir?.trim() || path.join(os.homedir(), ".meeting-notes");
+    return {
+      mode: "standalone",
+      backendDir: bundled.backendDir,
+      uvBin: bundled.uvBin,
+      bundledBinDir: bundled.binDir,
+      runtimeRoot: path.join(userRoot, "runtime"),
+      dataDir: opts.dataDirOverride || envData || path.join(userRoot, "data"),
+      modelsDir: envModels || path.join(userRoot, "models"),
+    };
+  }
+
+  return tryRepo(opts.savedDir);
 }
 
 export function allocateFreePort(preferredPort?: number): Promise<number> {
@@ -103,12 +187,16 @@ export interface SidecarManagerOptions {
   resourcesPath?: string;
   savedBackendDir?: string | null;
   dataDirOverride?: string | null;
+  userDataDir?: string | null;
+  defaultMirror?: BootstrapMirror;
 }
 
 export class SidecarManager extends EventEmitter {
   private readonly opts: SidecarManagerOptions;
   private readonly logs = new LogRingBuffer(MAX_LOGS);
   private proc: ChildProcessByStdio<null, Readable, Readable> | null = null;
+  private bootstrapAbort: AbortController | null = null;
+  private mirror: BootstrapMirror;
   private starting = false;
   private attachedExternal = false;
   private intentionalStop = false;
@@ -123,11 +211,13 @@ export class SidecarManager extends EventEmitter {
     error: "",
     restarts: 0,
     startedAt: null,
+    bootstrap: null,
   };
 
   constructor(opts: SidecarManagerOptions) {
     super();
     this.opts = opts;
+    this.mirror = opts.defaultMirror ?? "official";
   }
 
   getStatus(): SidecarStatus {
@@ -202,42 +292,97 @@ export class SidecarManager extends EventEmitter {
     this.starting = true;
 
     try {
-      const backendDir = resolveBackendDir({
+      const layout = resolveSidecarLayout({
         appPath: this.opts.appPath,
         envDir: process.env.MN_BACKEND_DIR,
         savedDir: this.opts.savedBackendDir,
         cwd: process.cwd(),
         resourcesPath: this.opts.resourcesPath,
+        userDataDir: this.opts.userDataDir,
+        dataDirOverride: this.opts.dataDirOverride,
       });
-      if (!backendDir) {
-        const err = "未找到会议记录后端目录（需要同时包含 app.py 与 .venv）";
+      if (!layout) {
+        const err = "未找到会议记录后端目录（需要完整安装包，或同时包含 app.py 与 .venv 的开发目录）";
         this.emitLog("system", err);
-        this.setStatus({ phase: "error", port: null, error: err });
+        this.setStatus({ phase: "error", port: null, error: err, bootstrap: null });
         return this.getStatus();
       }
 
-      const pythonBin = resolvePythonBin(backendDir);
-      if (!pythonBin) {
-        const err = `未找到 Python 虚拟环境：${backendDir}/.venv`;
-        this.emitLog("system", err);
-        this.setStatus({ phase: "error", port: null, backendDir, error: err });
-        return this.getStatus();
-      }
+      const backendDir = layout.backendDir;
+      const dataDir = layout.dataDir;
+      let pythonBin: string;
 
-      const dataDir =
-        this.opts.dataDirOverride || process.env.MEETING_DATA?.trim() || path.join(backendDir, "data");
+      if (layout.mode === "standalone") {
+        let lastProgress: BootstrapProgress | null = null;
+        this.bootstrapAbort = new AbortController();
+        try {
+          const boot = await runStandaloneBootstrap({
+            backendDir: layout.backendDir,
+            uvBin: layout.uvBin,
+            runtimeRoot: layout.runtimeRoot,
+            dataDir: layout.dataDir,
+            modelsDir: layout.modelsDir,
+            mirror: this.mirror,
+            signal: this.bootstrapAbort.signal,
+            onProgress: (progress) => {
+              lastProgress = progress;
+              this.setStatus({
+                phase: "bootstrapping",
+                mode: "standalone",
+                pid: null,
+                port: null,
+                backendDir,
+                dataDir,
+                error: "",
+                bootstrap: progress,
+              });
+            },
+            onLog: (stream, line) => this.emitLog(stream, line),
+          });
+          pythonBin = boot.pythonBin;
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (this.intentionalStop) {
+            this.setStatus({ phase: "stopped", mode: "standalone", pid: null, port: null, bootstrap: null });
+            return this.getStatus();
+          }
+          this.emitLog("system", `运行环境初始化失败：${errMsg}`);
+          this.setStatus({
+            phase: "error",
+            mode: "standalone",
+            pid: null,
+            port: null,
+            backendDir,
+            dataDir,
+            error: errMsg,
+            bootstrap: lastProgress ?? {
+              stage: "python",
+              percent: 0,
+              message: errMsg,
+              mirror: this.mirror,
+              isUpgrade: false,
+            },
+          });
+          return this.getStatus();
+        } finally {
+          this.bootstrapAbort = null;
+        }
+      } else {
+        pythonBin = layout.pythonBin;
+      }
 
       const envPortRaw = process.env.MN_SIDECAR_PORT?.trim();
       const envPort = envPortRaw && /^\d+$/.test(envPortRaw) ? Number(envPortRaw) : undefined;
 
       // In dev mode (`!isPackaged`), attach if a dev backend is already running on the configured port (default 8770).
-      if (!this.opts.isPackaged) {
+      if (!this.opts.isPackaged && layout.mode === "repo") {
         const devPort = envPort ?? 8770;
         if (await this.probeHealth(devPort)) {
           this.attachedExternal = true;
           this.emitLog("system", `检测到开发后端已在 127.0.0.1:${devPort} 运行，直接复用连接`);
           this.setStatus({
             phase: "running",
+            mode: "repo",
             pid: null,
             port: devPort,
             backendDir,
@@ -245,6 +390,7 @@ export class SidecarManager extends EventEmitter {
             dataDir,
             error: "",
             startedAt: Date.now(),
+            bootstrap: null,
           });
           return this.getStatus();
         }
@@ -254,26 +400,39 @@ export class SidecarManager extends EventEmitter {
       this.attachedExternal = false;
       this.setStatus({
         phase: "starting",
+        mode: layout.mode,
         pid: null,
         port: null,
         backendDir,
         pythonBin,
         dataDir,
         error: "",
+        bootstrap: null,
       });
       this.emitLog("system", `正在启动本机语音服务 (${pythonBin}) -> 127.0.0.1:${port}`);
+
+      const childEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        PYTHONUNBUFFERED: "1",
+        PYTHONUTF8: "1",
+        PYTHONDONTWRITEBYTECODE: "1",
+        MEETING_DATA: dataDir,
+        ...(layout.mode === "standalone"
+          ? {
+              MODELSCOPE_CACHE: layout.modelsDir,
+              HF_HOME: path.join(layout.modelsDir, "huggingface"),
+              PATH: buildSidecarPath(process.env.PATH, layout.bundledBinDir),
+            }
+          : {}),
+      };
 
       const child = spawn(
         pythonBin,
         ["-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", String(port)],
         {
           cwd: backendDir,
-          env: {
-            ...process.env,
-            PYTHONUNBUFFERED: "1",
-            PYTHONUTF8: "1",
-            ...(this.opts.dataDirOverride ? { MEETING_DATA: this.opts.dataDirOverride } : {}),
-          },
+          env: childEnv,
+          windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -343,7 +502,7 @@ export class SidecarManager extends EventEmitter {
         }
       });
 
-      const deadline = Date.now() + 30_000;
+      const deadline = Date.now() + 45_000;
       while (Date.now() < deadline) {
         if (this.proc !== child || this.intentionalStop) {
           return this.getStatus();
@@ -356,6 +515,7 @@ export class SidecarManager extends EventEmitter {
             error: "",
             restarts: 0,
             startedAt: Date.now(),
+            bootstrap: null,
           });
           return this.getStatus();
         }
@@ -378,7 +538,7 @@ export class SidecarManager extends EventEmitter {
         clearTimeout(killTimer);
       }
 
-      const timeoutMsg = "本机语音服务启动超时（30 秒），请查看诊断信息或重试";
+      const timeoutMsg = "本机语音服务启动超时（45 秒），请查看诊断信息或重试";
       this.emitLog("system", timeoutMsg);
       this.setStatus({ phase: "error", pid: null, port: null, error: timeoutMsg });
       return this.getStatus();
@@ -393,23 +553,35 @@ export class SidecarManager extends EventEmitter {
       this.restartTimer = null;
     }
     this.intentionalStop = true;
+    if (this.bootstrapAbort) {
+      this.bootstrapAbort.abort();
+      this.bootstrapAbort = null;
+    }
     if (this.attachedExternal && !this.proc) {
       this.attachedExternal = false;
-      this.setStatus({ phase: "stopped", pid: null, port: null });
+      this.setStatus({ phase: "stopped", pid: null, port: null, bootstrap: null });
       return;
     }
     const child = this.proc;
     if (!child) {
-      this.setStatus({ phase: "stopped", pid: null });
+      this.setStatus({ phase: "stopped", pid: null, port: null, bootstrap: null });
       return;
     }
     this.setStatus({ phase: "stopping" as SidecarPhase });
     await new Promise<void>((resolve) => {
       const killTimer = setTimeout(() => {
+        if (process.platform === "win32" && child.pid) {
+          try {
+            spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+              stdio: "ignore",
+              windowsHide: true,
+            });
+          } catch {}
+        }
         try {
           child.kill("SIGKILL");
         } catch {}
-      }, 5000);
+      }, 3000);
       child.once("exit", () => {
         clearTimeout(killTimer);
         resolve();
@@ -422,13 +594,26 @@ export class SidecarManager extends EventEmitter {
       }
     });
     this.proc = null;
-    this.setStatus({ phase: "stopped", pid: null, port: null });
+    this.setStatus({ phase: "stopped", pid: null, port: null, bootstrap: null });
   }
 
   async restart(): Promise<SidecarStatus> {
     this.emitLog("system", "正在重启 Python 后端…");
     await this.stop();
     this.setStatus({ restarts: 0 });
+    return this.start();
+  }
+
+  async retryBootstrap(mirror?: BootstrapMirror): Promise<SidecarStatus> {
+    if (mirror === "cn" || mirror === "official") {
+      this.mirror = mirror;
+    }
+    this.emitLog(
+      "system",
+      `正在重新初始化运行环境（镜像：${this.mirror === "cn" ? "清华加速" : "官方源"}）…`,
+    );
+    await this.stop();
+    this.setStatus({ restarts: 0, error: "", bootstrap: null });
     return this.start();
   }
 }

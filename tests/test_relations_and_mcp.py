@@ -230,13 +230,12 @@ def test_markdown_todo_parity_with_frontend_js():
     )
     proc = subprocess.run(
         [node, "--input-type=module", "-e", js_probe, str((ROOT / "static/js/markdown.js").resolve())],
-        input=fixture,
-        text=True,
+        input=fixture.encode("utf-8"),
         capture_output=True,
         timeout=15,
         check=True,
     )
-    js_res = json.loads(proc.stdout)
+    js_res = json.loads(proc.stdout.decode("utf-8"))
     assert js_res["counts"] == {"total": len(py_items), "done": sum(1 for x in py_items if x["done"])}
     for i, (js_true, js_false) in enumerate(js_res["toggled"]):
         py_true, ok_t = relations.toggle_markdown_todo(fixture, i, True)

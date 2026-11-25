@@ -38,18 +38,23 @@ export class TrayController {
   }
 
   private resolveIconPath(): string {
-    const cand = this.deps.isPackaged
-      ? path.join(this.deps.resourcesPath, "trayTemplate.png")
-      : path.join(import.meta.dirname, "../../build/trayTemplate.png");
-    return cand;
+    const file = process.platform === "darwin" ? "trayTemplate.png" : "icon.png";
+    return this.deps.isPackaged
+      ? path.join(this.deps.resourcesPath, file)
+      : path.join(import.meta.dirname, `../../build/${file}`);
   }
 
   start(): void {
     if (this.tray) return;
     const iconPath = this.resolveIconPath();
-    const img = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
-    if (process.platform === "darwin" && !img.isEmpty()) {
-      img.setTemplateImage(true);
+    let img = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+    if (!img.isEmpty()) {
+      if (process.platform === "darwin") {
+        img.setTemplateImage(true);
+      } else {
+        const size = process.platform === "win32" ? 16 : 22;
+        img = img.resize({ width: size, height: size });
+      }
     }
     this.tray = new Tray(img);
     this.tray.setToolTip("会议记录 · 本机转写 & AI 纪要");
@@ -98,6 +103,7 @@ export class TrayController {
 
   private computeTitle(sc: SidecarStatus, rec: RecorderSyncState): string {
     if (process.platform !== "darwin") return "";
+    if (sc.phase === "bootstrapping") return " 初始化中";
     if (sc.phase === "starting") return " 启动中";
     if (sc.phase === "error") return " 异常";
     if (rec.active) return rec.paused ? " 已暂停" : " ● 录音中";
@@ -134,23 +140,25 @@ export class TrayController {
     }
 
     const statusLine =
-      sc.phase === "starting"
-        ? "语音服务启动中…"
-        : sc.phase === "error"
-          ? "语音服务异常"
-          : rec.active
-            ? rec.paused
-              ? "手动录音已暂停"
-              : "正在会议录音"
-            : amb?.enabled
-              ? amb.state === "speech"
-                ? "全天模式 · 正在记录对话"
-                : amb.state === "paused"
-                  ? "全天模式 · 已暂停"
-                  : amb.state === "held"
-                    ? "全天模式 · 开会录音中已暂避"
-                    : "全天模式 · 正在监听"
-              : "会议记录 · 待机中";
+      sc.phase === "bootstrapping"
+        ? "正在初始化本机语音环境…"
+        : sc.phase === "starting"
+          ? "语音服务启动中…"
+          : sc.phase === "error"
+            ? "语音服务异常"
+            : rec.active
+              ? rec.paused
+                ? "手动录音已暂停"
+                : "正在会议录音"
+              : amb?.enabled
+                ? amb.state === "speech"
+                  ? "全天模式 · 正在记录对话"
+                  : amb.state === "paused"
+                    ? "全天模式 · 已暂停"
+                    : amb.state === "held"
+                      ? "全天模式 · 开会录音中已暂避"
+                      : "全天模式 · 正在监听"
+                : "会议记录 · 待机中";
 
     const detected = this.deps.getDetectedMeetingApp?.() ?? null;
     const sig = JSON.stringify([

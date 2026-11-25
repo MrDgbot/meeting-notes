@@ -3,6 +3,7 @@ export const IPC = {
   SIDECAR_STATUS: "sidecar:status",
   SIDECAR_LOGS: "sidecar:logs",
   SIDECAR_RESTART: "sidecar:restart",
+  SIDECAR_RETRY_BOOTSTRAP: "sidecar:retryBootstrap",
   SHELL_OPEN_DATA_DIR: "shell:openDataDir",
   SHELL_REVEAL_MEETING: "shell:revealMeeting",
   SHELL_OPEN_EXTERNAL: "shell:openExternal",

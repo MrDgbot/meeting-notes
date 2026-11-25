@@ -473,6 +473,9 @@ def level_pair(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return (y if LEVEL_USE == "all" else x), y
 
 
+_NO_WIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if sys.platform == "win32" else {}
+
+
 def _tmp_audio_path(dst: Path, suffix: str) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".tmp-", suffix=suffix, dir=dst.parent)
@@ -486,7 +489,7 @@ def to_wav16k(src: str | Path, dst: str | Path) -> None:
     try:
         p = subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, **_NO_WIN,
         )
         if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             raise RuntimeError("音频解码失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
@@ -505,7 +508,7 @@ def pcm_to_wav(pcm: Path, wav: Path, channels: int = 1) -> None:
         p = subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-f", "s16le", "-ar", "16000", "-ac", str(channels),
              "-i", str(pcm), "-f", "wav", str(tmp)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, **_NO_WIN,
         )
         if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             raise RuntimeError("录音保存失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
@@ -521,7 +524,7 @@ def make_mp3(wav: Path, mp3: Path) -> None:
     try:
         p = subprocess.run(
             ["ffmpeg", "-loglevel", "error", "-y", "-i", str(wav), "-b:a", "64k", "-f", "mp3", str(tmp)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, **_NO_WIN,
         )
         if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             raise RuntimeError("MP3 编码失败: " + ((p.stderr or "").strip()[:300] or f"exit {p.returncode}"))
@@ -532,14 +535,33 @@ def make_mp3(wav: Path, mp3: Path) -> None:
 
 
 def duration_of(path: Path) -> float:
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
-    ).stdout.strip()
     try:
-        return float(out)
-    except ValueError:
-        return 0.0
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, **_NO_WIN,
+        ).stdout.strip()
+        val = float(out)
+        if val > 0:
+            return val
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    try:
+        val = float(sf.info(str(path)).duration)
+        if val > 0:
+            return val
+    except (RuntimeError, OSError, ValueError):
+        pass
+    try:
+        p = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", **_NO_WIN,
+        )
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", p.stderr or "")
+        if m:
+            return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return 0.0
 
 
 _OFFLINE_VADS: dict[tuple, object] = {}
@@ -1045,7 +1067,7 @@ class Engine:
         try:
             p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_worker.py")), str(wav), str(out),
                                 str(int(num_spk or 0))], capture_output=True, text=True,
-                               timeout=max(900, duration_of(wav) * 1.5))
+                               timeout=max(900, duration_of(wav) * 1.5), **_NO_WIN)
             if p.returncode != 0:
                 raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
             r = json.loads(out.read_text())
@@ -1062,7 +1084,7 @@ class Engine:
         try:
             p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_nemotron.py")), str(wav), str(out),
                                 str(int(num_spk or 0))], capture_output=True, text=True,
-                               timeout=max(900, duration_of(wav) * 2))
+                               timeout=max(900, duration_of(wav) * 2), **_NO_WIN)
             if p.returncode != 0:
                 raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
             r = json.loads(out.read_text())
