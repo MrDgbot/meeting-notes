@@ -12,8 +12,6 @@ concurrency:
 
 env:
   PYTHONUTF8: "1"  # Windows 上中文输出不按 GBK / cp1252
-  MODELSCOPE_CACHE: ${{ github.workspace }}/.ms-cache
-  MN_TEST_LOAD_S: "900"
 
 defaults:
   run:
@@ -141,6 +139,9 @@ jobs:
   test:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
+    env:
+      MODELSCOPE_CACHE: ${{ github.workspace }}/.ms-cache
+      MN_TEST_LOAD_S: "900"
     strategy:
       fail-fast: false
       matrix:

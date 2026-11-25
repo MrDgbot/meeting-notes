@@ -85,32 +85,44 @@ describe("sidecar resolution & log buffering", () => {
   });
 
   it("selects standalone layout when packaged outside a dev repo checkout", () => {
-    const resDir = makeTempDir("mn-standalone-res-");
-    const userDir = makeTempDir("mn-standalone-user-");
-    const appDir = makeTempDir("mn-standalone-app-");
+    const prevModels = process.env.MODELSCOPE_CACHE;
+    const prevData = process.env.MEETING_DATA;
+    delete process.env.MODELSCOPE_CACHE;
+    delete process.env.MEETING_DATA;
 
-    fs.mkdirSync(path.join(resDir, "backend"), { recursive: true });
-    fs.writeFileSync(path.join(resDir, "backend", "app.py"), "");
-    fs.writeFileSync(path.join(resDir, "backend", "pyproject.toml"), "");
-    fs.writeFileSync(path.join(resDir, "backend", "uv.lock"), "");
-    fs.mkdirSync(path.join(resDir, "bin"), { recursive: true });
-    fs.writeFileSync(path.join(resDir, "bin", "uv"), "");
+    try {
+      const resDir = makeTempDir("mn-standalone-res-");
+      const userDir = makeTempDir("mn-standalone-user-");
+      const appDir = makeTempDir("mn-standalone-app-");
 
-    const layout = resolveSidecarLayout({
-      appPath: appDir,
-      cwd: appDir,
-      resourcesPath: resDir,
-      userDataDir: userDir,
-      platform: "darwin",
-    });
+      fs.mkdirSync(path.join(resDir, "backend"), { recursive: true });
+      fs.writeFileSync(path.join(resDir, "backend", "app.py"), "");
+      fs.writeFileSync(path.join(resDir, "backend", "pyproject.toml"), "");
+      fs.writeFileSync(path.join(resDir, "backend", "uv.lock"), "");
+      fs.mkdirSync(path.join(resDir, "bin"), { recursive: true });
+      fs.writeFileSync(path.join(resDir, "bin", "uv"), "");
 
-    expect(layout?.mode).toBe("standalone");
-    if (layout?.mode === "standalone") {
-      expect(layout.backendDir).toBe(path.join(resDir, "backend"));
-      expect(layout.uvBin).toBe(path.join(resDir, "bin", "uv"));
-      expect(layout.runtimeRoot).toBe(path.join(userDir, "runtime"));
-      expect(layout.dataDir).toBe(path.join(userDir, "data"));
-      expect(layout.modelsDir).toBe(path.join(userDir, "models"));
+      const layout = resolveSidecarLayout({
+        appPath: appDir,
+        cwd: appDir,
+        resourcesPath: resDir,
+        userDataDir: userDir,
+        platform: "darwin",
+      });
+
+      expect(layout?.mode).toBe("standalone");
+      if (layout?.mode === "standalone") {
+        expect(layout.backendDir).toBe(path.join(resDir, "backend"));
+        expect(layout.uvBin).toBe(path.join(resDir, "bin", "uv"));
+        expect(layout.runtimeRoot).toBe(path.join(userDir, "runtime"));
+        expect(layout.dataDir).toBe(path.join(userDir, "data"));
+        expect(layout.modelsDir).toBe(path.join(userDir, "models"));
+      }
+    } finally {
+      if (prevModels === undefined) delete process.env.MODELSCOPE_CACHE;
+      else process.env.MODELSCOPE_CACHE = prevModels;
+      if (prevData === undefined) delete process.env.MEETING_DATA;
+      else process.env.MEETING_DATA = prevData;
     }
   });
 });
