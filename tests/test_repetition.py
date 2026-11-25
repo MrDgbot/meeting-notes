@@ -2,6 +2,8 @@
 
 用法：.venv/bin/python tests/test_repetition.py
 """
+from __future__ import annotations
+
 import json
 import os
 import sys
@@ -135,16 +137,63 @@ def test_other_shapes():
     check(repetition.collapse_repetition("今天开会") == "今天开会", "普通句子")
 
 
+def _safe_is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def _find_attached_sample(candidates=None) -> Path | None:
+    if candidates is None:
+        candidates = []
+        env_sample = os.environ.get("MN_REPETITION_SAMPLE", "").strip()
+        if env_sample:
+            candidates.append(Path(env_sample).expanduser())
+        candidates.append(Path(__file__).resolve().parents[1] / "uploads" / "repeat-loop-live_a31e.json")
+    return next((p for p in candidates if _safe_is_file(p)), None)
+
+
+def test_find_attached_sample_ignores_permission_error():
+    class _UnreadableCandidate:
+        def is_file(self) -> bool:
+            raise PermissionError(
+                13,
+                "Permission denied",
+                "/home/ubuntu/.cursor/projects/workspace/uploads/repeat-loop-live_a31e.json",
+            )
+
+    check(
+        _find_attached_sample([_UnreadableCandidate()]) is None,
+        "候选路径触发 PermissionError 时安全返回 None",
+    )
+    prev_env = os.environ.get("MN_REPETITION_SAMPLE")
+    try:
+        with tempfile.TemporaryDirectory(prefix="mn-rep-sample-") as td:
+            sample = Path(td) / "repeat-loop-live_a31e.json"
+            sample.write_text("[]", encoding="utf-8")
+            check(
+                _find_attached_sample([_UnreadableCandidate(), sample]) == sample,
+                "跳过不可读候选后继续命中后续可读文件",
+            )
+            os.environ["MN_REPETITION_SAMPLE"] = str(sample)
+            check(
+                _find_attached_sample() == sample,
+                "环境变量 MN_REPETITION_SAMPLE 指向可读文件时优先命中",
+            )
+    finally:
+        if prev_env is None:
+            os.environ.pop("MN_REPETITION_SAMPLE", None)
+        else:
+            os.environ["MN_REPETITION_SAMPLE"] = prev_env
+
+
 def test_attached_file_if_present():
-    candidates = [
-        Path("/home/ubuntu/.cursor/projects/workspace/uploads/repeat-loop-live_a31e.json"),
-        Path(__file__).resolve().parents[1] / "uploads" / "repeat-loop-live_a31e.json",
-    ]
-    path = next((p for p in candidates if p.exists()), None)
+    path = _find_attached_sample()
     if path is None:
         print("ok   附件不在这台机器上，跳过整文件检查")
         return
-    segs = json.loads(path.read_text())
+    segs = json.loads(path.read_text(encoding="utf-8"))
     changed = []
     for seg in segs:
         got = repetition.collapse_repetition(seg["text"])
@@ -181,6 +230,7 @@ if __name__ == "__main__":
     test_single_char_run()
     test_repeated_clause()
     test_other_shapes()
+    test_find_attached_sample_ignores_permission_error()
     test_attached_file_if_present()
     test_loaded_transcript_is_cleaned()
     if fails:

@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -32,11 +34,30 @@ jobs:
         run: python3 scripts/check_invariants.py
       - name: Install desktop dependencies
         run: pnpm --dir desktop install --frozen-lockfile
-      - name: Typecheck, lint, and unit tests
+      - name: Typecheck, lint, unit tests, and bundle build
         run: |
           pnpm --dir desktop typecheck
           pnpm --dir desktop lint
           pnpm --dir desktop test
+          pnpm --dir desktop build
+      - name: Dry-run verify release notes generation
+        shell: bash
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$RAW_TAG" != v* ]]; then
+            echo "Skipping release notes dry-run for non-tag ref: $RAW_TAG"
+            exit 0
+          fi
+          OUT="$RUNNER_TEMP/preflight-release-notes.md"
+          node scripts/generate-release-notes.mjs \
+            --tag "$RAW_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --out "$OUT"
+          test -s "$OUT"
+          echo "Verified release notes generation for $RAW_TAG ($(wc -l < "$OUT") lines)."
+          head -n 30 "$OUT"
 
   build:
     needs: preflight
@@ -223,6 +244,54 @@ jobs:
             --out release-notes.md
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           cat release-notes.md
+      - name: Verify release asset completeness and write summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          missing=()
+          for req in SHA256SUMS.txt latest-mac.yml latest.yml latest-linux.yml; do
+            if [ ! -s "dist-release/$req" ]; then
+              missing+=("$req")
+            fi
+          done
+
+          for ext in dmg zip exe AppImage deb; do
+            matches=(dist-release/*."$ext")
+            if [ ${#matches[@]} -eq 0 ]; then
+              missing+=("*.$ext")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required release assets: ${missing[*]}"
+            {
+              echo "## ❌ Release Asset Check Failed (${RELEASE_TAG})"
+              echo ""
+              echo "Missing required artifacts:"
+              for item in "${missing[@]}"; do
+                echo "- \`$item\`"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          {
+            echo "## 📦 Release Artifacts (${RELEASE_TAG})"
+            echo ""
+            echo "| File | Size | SHA-256 |"
+            echo "|---|---:|---|"
+            for f in dist-release/*; do
+              [ -f "$f" ] || continue
+              name="$(basename "$f")"
+              size_bytes="$(stat -c%s "$f")"
+              size_human="$(numfmt --to=iec-i --suffix=B "$size_bytes" 2>/dev/null || echo "${size_bytes} B")"
+              sha="$(sha256sum "$f" | awk '{print $1}')"
+              echo "| \`$name\` | ${size_human} | \`${sha}\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "All required release assets verified."
       - name: Publish GitHub Release
         shell: bash
         env:

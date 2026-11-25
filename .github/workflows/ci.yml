@@ -1,5 +1,4 @@
-# 在 Linux / Windows / macOS 上各跑一遍：单元测试 → 下载（或从缓存取）语音模型 → 集成测试 → 端到端转写一段普通话录音（macOS 除外）。
-# Linux 上另外用 PulseAudio 虚拟声卡测全天模式的采音（放录音进去，核对自动记录出来的文字），并校验 Docker 镜像构建。
+# 按变更路径智能分流：桌面端快速反馈（typecheck / lint / test / build）、跨平台后端测试、TLA+ 形式化校验、Docker CPU 镜像验证，最终由 ci-summary 汇总门禁。
 name: CI
 on:
   push:
@@ -21,7 +20,127 @@ defaults:
     shell: bash
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+      formal: ${{ steps.filter.outputs.formal }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect changed components
+        id: filter
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          run_all=false
+          base_sha=""
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] || [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            run_all=true
+          else
+            if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+              base_sha="${PR_BASE_SHA:-}"
+            else
+              base_sha="${PUSH_BEFORE_SHA:-}"
+            fi
+
+            if [[ -z "${base_sha}" ]] || [[ "${base_sha}" =~ ^0+$ ]] || ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
+              run_all=true
+            fi
+          fi
+
+          backend=false
+          desktop=false
+          formal=false
+          docker=false
+
+          if [[ "${run_all}" == "true" ]]; then
+            backend=true
+            desktop=true
+            formal=true
+            docker=true
+            echo "Running all jobs (event=${GITHUB_EVENT_NAME}, ref_type=${GITHUB_REF_TYPE}, base=${base_sha:-none})"
+          else
+            mapfile -t changed_files < <(git -c core.quotepath=false diff --name-only "${base_sha}" HEAD)
+            echo "Changed files (${#changed_files[@]}):"
+            if (( ${#changed_files[@]} > 0 )); then
+              for f in "${changed_files[@]}"; do
+                [[ -z "$f" ]] && continue
+                echo "  - $f"
+
+                if [[ "$f" == ".github/workflows/ci.yml" ]]; then
+                  backend=true
+                  desktop=true
+                  formal=true
+                  docker=true
+                  continue
+                fi
+
+                if [[ "$f" == desktop/* || "$f" == "scripts/check_invariants.py" ]]; then
+                  desktop=true
+                fi
+
+                if [[ "$f" =~ ^[^/]+\.py$ || "$f" == "pyproject.toml" || "$f" == "uv.lock" || "$f" == static/* || "$f" == tests/* || "$f" == scripts/* ]]; then
+                  backend=true
+                fi
+
+                if [[ "$f" == formal/* || "$f" == "scripts/check_formal.sh" || "$f" =~ ^[^/]+\.py$ ]]; then
+                  formal=true
+                fi
+
+                if [[ "$f" == "Dockerfile" || "$f" =~ ^[^/]+\.py$ || "$f" == "pyproject.toml" || "$f" == "uv.lock" || "$f" == static/* || "$f" == "scripts/install-linux-cpu.sh" ]]; then
+                  docker=true
+                fi
+              done
+            fi
+          fi
+
+          echo "Selected targets: backend=${backend}, desktop=${desktop}, formal=${formal}, docker=${docker}"
+          {
+            echo "backend=${backend}"
+            echo "desktop=${desktop}"
+            echo "formal=${formal}"
+            echo "docker=${docker}"
+          } >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+      - name: 结构不变量检查（INV001-INV010）
+        run: python3 scripts/check_invariants.py
+      - name: 安装桌面端依赖
+        run: pnpm --dir desktop install --frozen-lockfile
+      - name: TypeScript 类型检查
+        run: pnpm --dir desktop typecheck
+      - name: Biome 代码规范检查
+        run: pnpm --dir desktop lint
+      - name: 桌面端单元测试（Vitest）
+        run: pnpm --dir desktop test
+      - name: 桌面端构建（electron-vite build）
+        run: pnpm --dir desktop build
+
   test:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -119,11 +238,13 @@ jobs:
         run: uv run --no-sync python tests/test_diarize_offline.py
 
   formal:
+    needs: changes
+    if: needs.changes.outputs.formal == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -136,6 +257,8 @@ jobs:
         run: bash scripts/check_formal.sh
 
   docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -152,3 +275,62 @@ jobs:
             ! command -v uv >/dev/null
             python -c 'import lan, app; print(\"docker ok\")'
           "
+
+  ci-summary:
+    needs: [changes, desktop, test, formal, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize CI results and enforce gate
+        env:
+          RES_CHANGES: ${{ needs.changes.result }}
+          RES_DESKTOP: ${{ needs.desktop.result }}
+          RES_TEST: ${{ needs.test.result }}
+          RES_FORMAL: ${{ needs.formal.result }}
+          RES_DOCKER: ${{ needs.docker.result }}
+          OUT_DESKTOP: ${{ needs.changes.outputs.desktop }}
+          OUT_BACKEND: ${{ needs.changes.outputs.backend }}
+          OUT_FORMAL: ${{ needs.changes.outputs.formal }}
+          OUT_DOCKER: ${{ needs.changes.outputs.docker }}
+        run: |
+          set -euo pipefail
+
+          badge() {
+            case "$1" in
+              success) echo "✅ success" ;;
+              skipped) echo "⏭️ skipped" ;;
+              failure) echo "❌ failure" ;;
+              cancelled) echo "🚫 cancelled" ;;
+              *) echo "⚠️ ${1:-unknown}" ;;
+            esac
+          }
+
+          {
+            echo "## CI Pipeline Summary"
+            echo ""
+            echo "| Job | Triggered | Result |"
+            echo "|---|---|---|"
+            echo "| \`changes\` | always | $(badge "$RES_CHANGES") |"
+            echo "| \`desktop\` | \`${OUT_DESKTOP:-n/a}\` | $(badge "$RES_DESKTOP") |"
+            echo "| \`test\` | \`${OUT_BACKEND:-n/a}\` | $(badge "$RES_TEST") |"
+            echo "| \`formal\` | \`${OUT_FORMAL:-n/a}\` | $(badge "$RES_FORMAL") |"
+            echo "| \`docker\` | \`${OUT_DOCKER:-n/a}\` | $(badge "$RES_DOCKER") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          for pair in \
+            "changes:${RES_CHANGES}" \
+            "desktop:${RES_DESKTOP}" \
+            "test:${RES_TEST}" \
+            "formal:${RES_FORMAL}" \
+            "docker:${RES_DOCKER}"; do
+            job="${pair%%:*}"
+            res="${pair#*:}"
+            if [[ "$res" != "success" && "$res" != "skipped" ]]; then
+              echo "::error::CI gate failed: job '${job}' ended with result '${res}'."
+              failed=1
+            fi
+          done
+
+          exit "$failed"
