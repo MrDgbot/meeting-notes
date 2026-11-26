@@ -10,6 +10,7 @@ import string
 import sys
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -290,11 +291,79 @@ def list_by_date(date: str) -> list[dict]:
     return out
 
 
+def _pending_delete_root() -> Path:
+    return DATA / ".pending-delete"
+
+
+def _rmtree_with_retry(target: Path, attempts: int = 3) -> bool:
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(target, ignore_errors=False)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            if attempt == attempts - 1:
+                log.debug("safe_rmtree deferred %s: %s", target, exc)
+                return False
+            time.sleep(0.005 * (attempt + 1))
+    return False
+
+
+def safe_rmtree(path: Path) -> bool:
+    """Atomically stage `path` into `.pending-delete` when possible and remove with retry."""
+    path = Path(path)
+    if not path.exists() and not path.is_symlink():
+        return True
+    if path.is_symlink() or path.is_file():
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            log.debug("safe_rmtree unlink failed for %s: %s", path, exc)
+            return False
+
+    pending = _pending_delete_root()
+    target = path
+    try:
+        pending.mkdir(parents=True, exist_ok=True)
+        staged = pending / f"{path.name}-{uuid.uuid4().hex}"
+        path.rename(staged)
+        target = staged
+    except OSError:
+        target = path
+    return _rmtree_with_retry(target)
+
+
+def sweep_pending_deletes() -> int:
+    """Retry removing staged directories in `.pending-delete` and return count removed."""
+    with _lock:
+        root = _pending_delete_root()
+        if not root.exists():
+            return 0
+        removed = 0
+        for entry in list(root.iterdir()):
+            if entry.is_symlink() or entry.is_file():
+                try:
+                    entry.unlink()
+                    removed += 1
+                except FileNotFoundError:
+                    removed += 1
+                except OSError:
+                    pass
+            elif entry.is_dir():
+                if _rmtree_with_retry(entry):
+                    removed += 1
+        return removed
+
+
 def delete(mid: str) -> None:
     with _lock:
         target = mdir(mid)
         _meta_cache.pop(_cache_key(mid), None)
-        shutil.rmtree(target, ignore_errors=True)
+        safe_rmtree(target)
 
 
 _GENERIC_UPLOAD_RE = re.compile(
@@ -425,7 +494,7 @@ def purge_trash(mid: str) -> bool:
         target = _trash_dir(mid)
         if not target.exists():
             return False
-        shutil.rmtree(target, ignore_errors=True)
+        safe_rmtree(target)
         return True
 
 
@@ -476,8 +545,9 @@ def purge_discarded(now: float | None = None, keep_s: float = DISCARD_KEEP_S) ->
         if now - _discarded_ts(d) > keep_s:
             info = read_json(d / "discard.json") or {}
             _record_discard_telemetry(info.get("id") or d.name, info, "purged_7d")
-            shutil.rmtree(d, ignore_errors=True)
-            gone.append(d.name)
+            safe_rmtree(d)
+            if not d.exists():
+                gone.append(d.name)
     return gone
 
 

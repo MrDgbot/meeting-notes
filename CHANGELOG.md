@@ -4,6 +4,27 @@
 
 ---
 
+## [v0.1.3] - 2026-11-26
+
+升级本机只读 MCP Server 至 v2 并提供标准 `meeting-context` Agent Skill，补齐 RSI 本地自学习闭环优化、全局闪问 AI 个性化推荐与浮窗视觉修复，并强化音频播放与底层推理稳定性。
+
+### 🔌 外部 AI 接入（MCP v2 & Agent Skill）
+
+- **MCP Server v2.0.0**：在保留原 6 个工具并增强分词打分检索的基础上，新增 `build_context_pack`（一键上下文打包与字符预算控制）、`list_projects`、`list_commitments`、`get_daily_summary`、`get_weekly_digest` 共 11 个只读工具，并新增 4 个预设 Prompts 与 4 个只读 Resources；严格强化 `--exclude-private` 隐私隔离与 JSON-RPC 错误处理。
+- **标准 Skill 与一键安装器**：新增 `skills/meeting-context/SKILL.md` 与零依赖安装脚本 `scripts/install-mcp-skill.mjs`（支持 Antigravity / Claude Code / Cursor / Codex / Claude Desktop，含 `--exclude-private`、`--data-dir`、`--dry-run`、`--uninstall`）；修复 `/api/mcp/config` 透传真实 `MEETING_DATA` 目录与本机 Python 路径，并在「设置 → 多端与集成」升级为 MCP & Skill 面板。
+
+### 🧠 RSI 自学习与全局闪问升级
+
+- **RSI 全链路优化**：修复全局人物改名/清除误触发声纹撤回哨兵导致阈值拉满关闭自动命名的问题；新增声纹跨会未命名聚类候选推荐（含同会共现排斥与单人库加严门槛）及连续 10 场零撤回温和回落机制；扩充上下文自动热词噪声与时间短语过滤；为全天模式补充近 50 段 VAD 滑动窗口、显式麦克风隔离、切换灵敏度自动重置与声学调优建议。
+- **全局闪问 AI 推荐与浮窗修复**：新增 `GET /api/ask-global/suggestions`，基于近期会议、活跃专题、未完承诺与待办调用 AI 生成个性化推荐问题（带数据指纹磁盘缓存、换一批刷新与本地降级）；修复 macOS 透明浮窗阴影残留/裁切及紧凑态底部胶囊溢出滚动条问题，区分悬浮窗与主窗口路由。
+
+### 🎵 音频播放与底层稳定性
+
+- **播放器与拖拽上传增强**：升级桌面端 `AudioPlayer` 与网页端 `player.js` 波形/播放交互及 `DragUploadOverlay` 体验。
+- **底层音频、模型管理与子进程池加固**：新增 `audio_utils.py`、`model_manager.py`、`runtime_telemetry.py`、`text_matching.py`、`worker_pool.py` 及对应单元测试，优化说话人分离常驻进程池与运行时观测能力。
+
+---
+
 ## [v0.1.2] - 2026-11-26
 
 支持未签名 macOS 应用内一键热更新，并修复更新日志 Markdown 渲染与链接跳转。

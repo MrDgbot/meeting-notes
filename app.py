@@ -6,8 +6,10 @@ import asyncio
 import contextlib
 import copy
 import hashlib
+import inspect
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -27,23 +29,27 @@ from pathlib import Path
 import httpx
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from starlette.background import BackgroundTask
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import audio_utils
 import insights
 import lan
 import llm
 import marks as marks_mod
 import meeting_state as ms
 import minutes_check
+import model_manager
 import prompts
 import relations
 import rsi_ambient
 import rsi_events
 import rsi_vocab
+import runtime_telemetry
 import store
 import vocab
 import voiceprints
+import worker_pool
 from ambient import STATES as AMBIENT_STATES, TRANSITIONS as AMBIENT_TRANSITIONS
 from ambient import (SENS, Ambient, has_user_content as ambient_has_user_content, list_devices, purge_candidates,
                      purge_old_audio, save_cfg as save_ambient_cfg, sens_thres, skips_from_segmap, storage_estimate)
@@ -153,16 +159,21 @@ def run_transcribe(mid: str):
             return
         wav = d / "audio.wav"
         mp3 = d / "audio.mp3"
+        enqueued_at = float(meta.get("queued_at") or meta.get("job_started") or time.time())
+        ffmpeg_s = 0.0
+        t_ff = time.perf_counter()
         # 先把原始录音转成 wav：后面就算模型出错，网页上也能播放录音、点“重新转写”
         if (d / "audio.pcm").exists() and (not wav.exists() or (d / "audio.pcm").stat().st_mtime > wav.stat().st_mtime):
             pcm_to_wav(d / "audio.pcm", wav, meta.get("audio_channels") or 1)
         if not wav.exists() and mp3.exists():  # 自动记录转写后只保留 mp3
             to_wav16k(mp3, wav)
             from_mp3 = True
+        ffmpeg_s += max(0.0, time.perf_counter() - t_ff)
         while not engine.ready:
             if engine.error and not engine.loading:
                 raise RuntimeError(f"{MODEL_FAIL}: " + engine.error)
             time.sleep(1)
+        queue_s = max(0.0, time.time() - enqueued_at - ffmpeg_s)
         dur = duration_of(wav)
         ms.transition(mid, ms.TRANSCRIBING, reason="job_start", duration=dur, error="", job_started=time.time(),
                       job_estimate=max(5.0, dur / {"nano": 4, "doubao": 10}.get(asr_mode(), 6) + (8 if asr_mode() == "doubao" else 3)
@@ -170,10 +181,23 @@ def run_transcribe(mid: str):
                                        + (dur * 0.2 + 40 if diarizer_mode() == "nemotron" else 0)))  # nemotron 含首次下载，时间按保守值估
         # wav 是从 mp3 解出来的就不要再压回去：mp3 有损，每次重新转写都重压一遍，几次后音质明显变差
         if not from_mp3 and (not mp3.exists() or mp3.stat().st_mtime < wav.stat().st_mtime):
+            t_mp3 = time.perf_counter()
             make_mp3(wav, mp3)
+            ffmpeg_s += max(0.0, time.perf_counter() - t_mp3)
         t = time.time()
         vad_kw = {"speech_noise_thres": sens_thres()} if meta.get("source") == "ambient" else None
-        paras = engine.transcribe(wav, meta.get("num_spk", 0), _meeting_hotwords(mid, meta), vad_kw)
+        tr_kwargs: dict = {}
+        try:
+            se = getattr(engine.transcribe, "side_effect", None)
+            target = se if callable(se) else engine.transcribe
+            sig = inspect.signature(target)
+            if "checkpoint_dir" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            ):
+                tr_kwargs["checkpoint_dir"] = d
+        except (TypeError, ValueError):
+            tr_kwargs["checkpoint_dir"] = d
+        paras = engine.transcribe(wav, meta.get("num_spk", 0), _meeting_hotwords(mid, meta), vad_kw, **tr_kwargs)
         cost = time.time() - t
         spk_embs = getattr(engine, "last_spk_embs", None)
         if spk_embs and spk_embs.get("speakers"):
@@ -188,10 +212,31 @@ def run_transcribe(mid: str):
                 names = dual_audio.suggest_channel_names(paras, existing)
                 if names != existing:
                     store.update(mid, speakers=names)
-        store.save(mid, "transcript.json", {"paragraphs": paras, "device": DEVICE, "cost": round(cost, 1),
-                                            "asr": engine.last_info,
-                                            "num_spk_requested": meta.get("num_spk", 0),
-                                            "created": datetime.now().isoformat(timespec="seconds")})
+        engine_timings = getattr(engine, "last_timings", None) or {}
+        timings = {
+            **engine_timings,
+            "queue_s": round(queue_s, 3),
+            "ffmpeg_s": round(ffmpeg_s, 3),
+        }
+        phase_keys = (
+            "queue_s", "ffmpeg_s", "model_load_s", "vad_s",
+            "diarize_load_s", "diarize_run_s", "asr_s", "postprocess_s",
+        )
+        timings["total_s"] = round(sum(float(timings.get(k) or 0.0) for k in phase_keys), 3)
+        last_info = getattr(engine, "last_info", None) or {}
+        audio_health = last_info.get("audio_health")
+        transcript_data: dict = {
+            "paragraphs": paras,
+            "device": DEVICE,
+            "cost": round(cost, 1),
+            "asr": last_info,
+            "timings": timings,
+            "num_spk_requested": meta.get("num_spk", 0),
+            "created": datetime.now().isoformat(timespec="seconds"),
+        }
+        if audio_health is not None:
+            transcript_data["audio_health"] = audio_health
+        store.save(mid, "transcript.json", transcript_data)
         try:
             fresh_meta = store.get(mid) or meta
             clear_smeta = False
@@ -233,8 +278,21 @@ def run_transcribe(mid: str):
         except Exception:  # noqa: BLE001
             log.debug("rsi post-transcribe hook failed %s", mid, exc_info=True)
         n = len({p["spk"] for p in paras})
-        ms.transition(mid, ms.READY, reason="transcribed", num_speakers=n, transcribe_cost=round(cost, 1),
-                      chars=sum(len(p["text"]) for p in paras))
+        ready_fields: dict = {
+            "num_speakers": n,
+            "transcribe_cost": round(cost, 1),
+            "chars": sum(len(p["text"]) for p in paras),
+            "boot_retries": 0,
+        }
+        if isinstance(audio_health, dict) and audio_health.get("warnings"):
+            ready_fields["audio_health"] = {
+                "ok": False,
+                "warnings": list(audio_health["warnings"]),
+                "dead_channels": list(audio_health.get("dead_channels") or []),
+            }
+        elif meta.get("audio_health"):
+            ready_fields["audio_health"] = {"ok": True, "warnings": []}
+        ms.transition(mid, ms.READY, reason="transcribed", **ready_fields)
         if meta.get("source") == "ambient":  # 全天记录量大：确认 mp3 有效后才删原始 pcm/wav，防止编码失败丢录音
             if mp3.exists() and mp3.stat().st_size > 0:
                 (d / "audio.pcm").unlink(missing_ok=True)
@@ -277,7 +335,7 @@ def queue_transcribe(mid: str, reason: str = "queue"):
             return
         _inflight.add(mid)
     try:
-        ms.transition(mid, ms.QUEUED, reason=reason, error="")
+        ms.transition(mid, ms.QUEUED, reason=reason, error="", queued_at=time.time())
         jobs.submit(run_transcribe, mid)
     except BaseException:
         with _inflight_lock:
@@ -302,6 +360,8 @@ DAILY = store.DATA / "daily"
 
 @app.on_event("startup")
 async def _startup():
+    runtime_telemetry.setup_rotating_log()
+    store.sweep_pending_deletes()
     store.purge_discarded()  # 回收站里超过 7 天的短对话
     threading.Thread(target=load_models, daemon=True).start()
     if not vocab.PATH.exists() and ambient.cfg.get("hotword"):  # 常用热词从全天模式设置迁到词库
@@ -316,7 +376,17 @@ async def _startup():
         if m["status"] in ms.ACTIVE:
             d = store.mdir(m["id"])
             if (d / "audio.pcm").exists() or (d / "audio.wav").exists() or (d / "audio.mp3").exists():
-                queue_transcribe(m["id"])
+                retries = int(m.get("boot_retries") or 0) + 1
+                store.update(m["id"], boot_retries=retries)
+                if retries >= 2:
+                    ms.transition(
+                        m["id"],
+                        ms.ERROR,
+                        reason="restart_interrupted",
+                        error="上次转写意外中断（已保留已完成分片），请点击重新转写",
+                    )
+                else:
+                    queue_transcribe(m["id"])
             else:
                 ms.transition(m["id"], ms.NEW, reason="restart_no_audio")
     if ambient.cfg.get("enabled"):
@@ -334,6 +404,11 @@ async def _shutdown():
         jobs.shutdown(wait=False, cancel_futures=True)
     if hasattr(minutes_jobs, "shutdown"):
         minutes_jobs.shutdown(wait=False, cancel_futures=True)
+    with contextlib.suppress(Exception):
+        worker_pool.default_pool().close_all()
+    if hasattr(engine, "unload"):
+        with contextlib.suppress(Exception):
+            engine.unload("all")
 
 
 # ---------------- 基础 ----------------
@@ -385,6 +460,46 @@ def reload_asr(request: Request):
     return health(request)
 
 
+def _ambient_actively_running() -> bool:
+    return (
+        bool(ambient.enabled)
+        or ambient.conv is not None
+        or ambient.state in ("starting", "listening", "speech")
+        or bool(getattr(ambient, "_pending_close", None))
+    )
+
+
+@app.post("/api/asr/unload")
+def unload_asr(body: dict = Body(default={})):
+    target = str((body or {}).get("target") or "all").strip()
+    force = bool((body or {}).get("force", False))
+    if target not in ("all", "nano", "live_asr", "paraformer", "diarizers"):
+        raise HTTPException(400, f"未知的卸载目标: {target}")
+    if not force:
+        with _inflight_lock:
+            has_inflight = bool(_inflight)
+        if LIVE or has_inflight or _ambient_actively_running():
+            raise HTTPException(409, "正在录音或转写中，请先结束后再释放模型内存")
+    res = engine.unload(target)
+    return {"ok": True, **res, "engine": engine.state_info()}
+
+
+def _apply_asr_model_switch(target_mode: str, prev_mode: str) -> None:
+    if target_mode != prev_mode:
+        if target_mode in ("nano", "doubao"):
+            for unused in ("live_asr", "paraformer"):
+                try:
+                    engine.unload(unused)
+                except Exception:  # noqa: BLE001
+                    log.debug("unload %s on switch failed", unused, exc_info=True)
+        elif target_mode == "paraformer":
+            try:
+                engine.unload("nano")
+            except Exception:  # noqa: BLE001
+                log.debug("unload nano on switch failed", exc_info=True)
+    engine.ensure(target_mode, True)
+
+
 @app.get("/api/asr")
 def get_asr():
     import doubao_asr
@@ -404,8 +519,10 @@ def asr_options() -> dict:
 def put_asr(body: dict = Body(...)):
     """body：{"model": 识别模型}、{"diarizer": 说话人分离方式}、{"doubao_ddc": 豆包语义顺滑}。"""
     m = body.get("model")
+    prev_model = asr_mode()
     with store.locked():
         s = store.get_settings()
+        prev_model = str((s.get("asr") or {}).get("model") or prev_model)
         asr = {**(s.get("asr") or {})}
         if "diarizer" in body:
             if body["diarizer"] not in DIARIZERS:
@@ -422,7 +539,7 @@ def put_asr(body: dict = Body(...)):
         s["asr"] = asr
         store.save_settings(s)
     if "model" in body and engine.ready:  # 后台预加载；nano_loading 统一在 engine.load_lock 内维护
-        threading.Thread(target=engine.ensure, args=(m, True), daemon=True).start()
+        threading.Thread(target=_apply_asr_model_switch, args=(m, prev_model), daemon=True).start()
     return get_asr()
 
 
@@ -893,6 +1010,8 @@ def delete_meeting(mid: str):
     meta = _meta_or_404(mid)
     if is_live_active(mid):
         raise HTTPException(409, "正在录音，先结束录音")
+    if _is_transcribe_inflight(mid):
+        raise HTTPException(409, "正在转写中，请稍后再试")
     is_short_unedited_ambient = False
     try:
         if meta.get("source") == "ambient" and float(meta.get("duration") or 0.0) < 90.0:
@@ -927,6 +1046,8 @@ def trash_meeting_api(mid: str):
     meta = _meta_or_404(mid)
     if is_live_active(mid):
         raise HTTPException(409, "正在录音，请先结束录音")
+    if _is_transcribe_inflight(mid):
+        raise HTTPException(409, "正在转写中，请稍后再试")
     ambient.discard(mid)
     try:
         trashed = store.trash_meeting(mid)
@@ -978,7 +1099,7 @@ def retranscribe(mid: str, body: dict = Body(default={})):
     d = store.mdir(mid)
     if not any((d / n).exists() for n in ("audio.wav", "audio.pcm", "audio.mp3")):
         raise HTTPException(400, "没有录音")
-    fields = {}
+    fields: dict = {"boot_retries": 0}
     if "num_spk" in body:
         raw_spk = body["num_spk"]
         if isinstance(raw_spk, bool):
@@ -992,8 +1113,7 @@ def retranscribe(mid: str, body: dict = Body(default={})):
         fields["num_spk"] = n
     if "hotword" in body:
         fields["hotword"] = str(body["hotword"] or "")
-    if fields:
-        store.update(mid, **fields)
+    store.update(mid, **fields)
     queue_transcribe(mid)
     return store.get(mid)
 
@@ -1035,9 +1155,7 @@ def _audio_lock(mid: str) -> threading.Lock:
         return lk
 
 
-@app.get("/api/meetings/{mid}/audio")
-def audio(mid: str):
-    meta = _meta_or_404(mid)
+def _materialize_wav_from_pcm(mid: str, meta: dict) -> None:
     d = store.mdir(mid)
     if not (d / "audio.mp3").exists() and not (d / "audio.wav").exists() and (d / "audio.pcm").exists() \
             and not is_live_active(mid) and not _ambient_busy(mid):
@@ -1051,10 +1169,62 @@ def audio(mid: str):
                 except BaseException:
                     tmp_wav.unlink(missing_ok=True)
                     raise
+
+
+@app.get("/api/meetings/{mid}/audio")
+def audio(mid: str):
+    meta = _meta_or_404(mid)
+    d = store.mdir(mid)
+    _materialize_wav_from_pcm(mid, meta)
     for name, mt in (("audio.mp3", "audio/mpeg"), ("audio.wav", "audio/wav")):
         if (d / name).exists():
-            return FileResponse(d / name, media_type=mt)
+            return FileResponse(d / name, media_type=mt, headers={"Cache-Control": "no-store"})
     raise HTTPException(404, "没有录音")
+
+
+@app.get("/api/meetings/{mid}/audio/clip")
+def audio_clip(mid: str, start: float, end: float, fmt: str = "wav"):
+    meta = _meta_or_404(mid)
+    fmt_norm = (fmt or "wav").strip().lower().lstrip(".")
+    if fmt_norm not in ("wav", "mp3"):
+        raise HTTPException(400, "不支持的音频格式，仅支持 wav 或 mp3")
+    if not (math.isfinite(start) and math.isfinite(end)) or start < 0 or start >= end:
+        raise HTTPException(400, "时间范围无效")
+    _materialize_wav_from_pcm(mid, meta)
+    d = store.mdir(mid)
+    src: Path | None = None
+    for cand in ("audio.wav", "audio.mp3"):
+        if (d / cand).exists():
+            src = d / cand
+            break
+    if src is None:
+        raise HTTPException(404, "没有录音")
+
+    tmp = tempfile.NamedTemporaryFile(prefix=f"mn-clip-{mid}-", suffix=f".{fmt_norm}", delete=False)
+    tmp.close()
+    tmp_out = Path(tmp.name)
+    try:
+        audio_utils.crop_audio_clip(src, start, end, tmp_out, fmt=fmt_norm)
+    except ValueError as e:
+        tmp_out.unlink(missing_ok=True)
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        tmp_out.unlink(missing_ok=True)
+        raise HTTPException(500, _friendly_error(e, "裁剪音频失败")) from e
+
+    from urllib.parse import quote
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", meta.get("title") or mid)
+    fname = f"{safe_title}_{start:.1f}-{end:.1f}.{fmt_norm}"
+    mt = "audio/mpeg" if fmt_norm == "mp3" else "audio/wav"
+    return FileResponse(
+        tmp_out,
+        media_type=mt,
+        background=BackgroundTask(os.unlink, str(tmp_out)),
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}",
+        },
+    )
 
 
 # ---------------- 实时录音 ----------------
@@ -1958,9 +2128,25 @@ def _export_zip(mid: str, meta: dict, paras: list[dict], safe_title: str):
 @app.get("/api/meetings/{mid}/export")
 def export(mid: str, fmt: str = "md"):
     meta = _meta_or_404(mid)
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", meta["title"])
+    if fmt == "audio":
+        from urllib.parse import quote
+        _materialize_wav_from_pcm(mid, meta)
+        d = store.mdir(mid)
+        for name, ext, mt in (("audio.mp3", "mp3", "audio/mpeg"), ("audio.wav", "wav", "audio/wav")):
+            if (d / name).exists():
+                fname = f"{safe_title}.{ext}"
+                return FileResponse(
+                    d / name,
+                    media_type=mt,
+                    headers={
+                        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}",
+                        "Cache-Control": "no-store",
+                    },
+                )
+        raise HTTPException(404, "没有录音")
     paras = _paras(mid)
     name = lambda p: prompts.spk_name(meta, p["spk"])  # noqa: E731
-    safe_title = re.sub(r'[\\/:*?"<>|]', "_", meta["title"])
     if fmt == "zip":
         return _export_zip(mid, meta, paras, safe_title)
     if fmt == "srt":
@@ -2239,6 +2425,8 @@ def ambient_config(body: dict = Body(...)):
     with store.locked():
         cfg = dict(ambient.cfg)
         old_summary_time = cfg.get("summary_time")
+        old_sensitivity = cfg.get("sensitivity")
+        old_device = cfg.get("device") or ""
         for k, typ in (("device", str), ("hotword", str), ("summary_time", str), ("split_min", float),
                        ("min_speech_s", float), ("max_conv_min", float), ("audio_keep_days", int), ("keep_awake", bool), ("keep_silence", bool),
                        ("sensitivity", str)):
@@ -2257,6 +2445,11 @@ def ambient_config(body: dict = Body(...)):
         cfg["enabled"] = ambient.cfg.get("enabled", False)
         save_ambient_cfg(cfg)
         ambient.reload_cfg()
+    if cfg.get("sensitivity") != old_sensitivity:
+        try:
+            rsi_ambient.reset_vad_stats(str(cfg.get("device") or old_device))
+        except Exception:  # noqa: BLE001
+            log.debug("rsi_ambient reset_vad_stats failed", exc_info=True)
     if cfg.get("summary_time") != old_summary_time:
         AUTO_DAILY.pop(datetime.now().strftime("%Y-%m-%d"), None)
     _notify_ambient_waiters()
@@ -2315,6 +2508,9 @@ def app_state():
         "auto_daily": {d: dict(v) for d, v in AUTO_DAILY.items()},
         "lan": {"running": lan.server.running, "port": lan.server.port, "error": lan.server.error},
         "local_llm": {"ours": bool(p and p.poll() is None)},
+        "memory": runtime_telemetry.host_memory_status(),
+        "workers": worker_pool.default_pool().status(),
+        "asr_idle_s": round(engine.idle_seconds(), 1) if hasattr(engine, "idle_seconds") else 0.0,
         "rsi": _rsi_summary_safe(),
         "schema": {"meeting": ms.schema(),
                    "ambient": {"states": list(AMBIENT_STATES),
@@ -2324,14 +2520,88 @@ def app_state():
     }
 
 
+@app.get("/api/diagnostics/export")
+def export_diagnostics():
+    payload = runtime_telemetry.export_diagnostics_zip(state_snapshot=app_state())
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=meeting-notes-support.zip",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/models/status")
+def get_models_status():
+    return model_manager.get_models_status()
+
+
+@app.post("/api/models/download")
+def start_model_download(body: dict = Body(...)):
+    model_id = str(body.get("model_id") or "").strip()
+    raw_source = str(body.get("source") or "auto").strip().lower()
+    source = "huggingface" if raw_source == "hf" else raw_source
+    if not model_id:
+        raise HTTPException(400, "缺少 model_id")
+    try:
+        task = model_manager.default_manager().start_download(model_id, source=source)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True, "task": task}
+
+
+@app.post("/api/models/cancel")
+def cancel_model_download():
+    task = model_manager.default_manager().cancel_download()
+    return {"ok": True, "task": task}
+
+
+@app.get("/api/models/roots")
+def get_model_roots():
+    roots = model_manager.list_roots()
+    scan = (
+        model_manager.scan_custom_roots(roots=roots)
+        if roots
+        else {"models": [], "gguf": [], "entries_scanned": 0, "truncated": False}
+    )
+    return {"roots": roots, "models": scan["models"], "gguf": scan["gguf"]}
+
+
+@app.post("/api/models/roots")
+def add_model_root(body: dict = Body(...)):
+    raw_path = str(body.get("path") or "").strip()
+    if not raw_path:
+        raise HTTPException(400, "请填写目录路径")
+    try:
+        roots = model_manager.add_root(raw_path)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "roots": roots}
+
+
+@app.delete("/api/models/roots")
+def remove_model_root(body: dict | None = Body(default=None), path: str = ""):
+    raw_path = str((body or {}).get("path") or path or "").strip()
+    if not raw_path:
+        raise HTTPException(400, "缺少目录路径")
+    roots = model_manager.remove_root(raw_path)
+    return {"ok": True, "roots": roots}
+
+
 # ---------------- 自学习（RSI，纯本地） ----------------
 def _rsi_payload() -> dict:
     min_s = float(ambient.cfg.get("min_speech_s") or 20.0)
+    sensitivity = str(ambient.cfg.get("sensitivity") or "high")
+    device = str(ambient.cfg.get("device") or "")
     return {
         "config": rsi_events.get_config(),
         "voiceprints": voiceprints.summary(),
         "vocab": rsi_vocab.summary(),
-        "ambient": rsi_ambient.summary(min_s),
+        "ambient": rsi_ambient.summary(min_s, current_sensitivity=sensitivity, device=device),
         "registry": rsi_events.get_registry(30),
     }
 
@@ -2558,8 +2828,10 @@ def rename_person_api(body: dict = _RSI_BODY):
     for mid, changed_spks, old_smeta, eff_meta in updated_records:
         auto_before = old_smeta.get("auto") if isinstance(old_smeta.get("auto"), dict) else {}
         for spk_k in changed_spks:
+            # 全局改名/合并人物是变更姓名标签，不是推翻自动声纹识别，不得计入 override 触发哨兵；
+            # 同时跳过仅由自动命名产生的未人工核验场次，避免在全局改名时把未核验场次批量写入声纹库挤掉人工样本。
             if spk_k in auto_before:
-                voiceprints.record_override(mid, spk_k, old_name, new_name)
+                continue
             if (mid, spk_k) not in migrated_keys and not rsi_events.is_excluded(eff_meta):
                 spk_embs = store.load(mid, "spk_embs.json")
                 if spk_embs:
@@ -2662,10 +2934,7 @@ def clear_person_api(body: dict = _RSI_BODY):
             if mutated_smeta:
                 upd["speaker_meta"] = new_smeta
             store.update(mid, **upd)
-        auto_before = old_smeta.get("auto") if isinstance(old_smeta.get("auto"), dict) else {}
-        for spk_k in changed_spks:
-            if spk_k in auto_before:
-                voiceprints.record_override(mid, spk_k, target_name, "")
+        # 全局清除人物会直接删除该人物声纹档案，不再按场批量触发 override 哨兵，避免误伤其他人物的自动命名。
         _update_commitments_speaker(mid, target_name, "对方")
         relations.invalidate_cache(mid)
         invalidate_derived_caches(mid)
@@ -2718,20 +2987,54 @@ def toggle_todo_api(body: dict = _RSI_BODY):
 
 @app.get("/api/mcp/config")
 def get_mcp_config():
-    base = str(store.BASE.resolve())
-    cfg = {
-        "mcpServers": {
-            "meeting-notes": {
-                "command": "uv",
-                "args": ["run", "--directory", base, "python", "mcp_server.py"],
-            }
+    import sys
+    import mcp_server
+
+    base_path = store.BASE.resolve()
+    base = str(base_path)
+    server_path = str((base_path / "mcp_server.py").resolve())
+    data_dir = str(store.DATA.resolve())
+    skill_file = (base_path / "skills" / "meeting-context" / "SKILL.md").resolve()
+    install_script_file = (base_path / "scripts" / "install-mcp-skill.mjs").resolve()
+    skill_path = str(skill_file) if skill_file.exists() else ""
+    install_cmd = (
+        f"node {shlex.quote(str(install_script_file))} --data-dir {shlex.quote(data_dir)}"
+        if install_script_file.exists()
+        else ""
+    )
+
+    venv_candidates = [
+        base_path / ".venv" / "bin" / "python",
+        base_path / ".venv" / "Scripts" / "python.exe",
+    ]
+    py_cmd = next((str(p) for p in venv_candidates if p.exists()), "")
+    if not py_cmd and not getattr(sys, "frozen", False) and sys.executable and Path(sys.executable).exists():
+        py_cmd = str(sys.executable)
+
+    if py_cmd:
+        server_entry = {
+            "command": py_cmd,
+            "args": [server_path],
+            "env": {"MEETING_DATA": data_dir},
         }
-    }
+    else:
+        server_entry = {
+            "command": "uv",
+            "args": ["run", "--directory", base, "python", "mcp_server.py"],
+            "env": {"MEETING_DATA": data_dir},
+        }
+
+    cfg = {"mcpServers": {"meeting-notes": server_entry}}
     return {
-        "server_path": str((store.BASE / "mcp_server.py").resolve()),
+        "server_path": server_path,
         "workspace": base,
+        "data_dir": data_dir,
+        "skill_path": skill_path,
+        "install_cmd": install_cmd,
         "config": cfg,
-        "tools": ["list_meetings", "search_meetings", "get_meeting", "get_related_meetings", "get_person_history", "list_todos"],
+        "tools": [t["name"] for t in mcp_server.TOOLS],
+        "prompts": [p["name"] for p in mcp_server.PROMPTS],
+        "resources": [r["uri"] for r in mcp_server.RESOURCES],
     }
 
 
@@ -2839,6 +3142,12 @@ async def ask_global_api(body: dict = _RSI_BODY):
         raise HTTPException(400, "请输入要询问的问题")
     prov = _prov(body["provider"]) if body.get("provider") else _active_prov_optional()
     return await insights.global_ask(q, prov)
+
+
+@app.get("/api/ask-global/suggestions")
+async def ask_global_suggestions_api(provider: str = "", refresh: bool = False):
+    prov = _prov(provider) if provider else _active_prov_optional()
+    return await insights.quick_ask_suggestions(prov, refresh=refresh)
 
 
 @app.get("/api/projects")
@@ -2998,6 +3307,8 @@ async def local_llm_status():
 async def local_llm_action(request: Request, body: dict = Body(...)):
     lan._only_here(request)
     act = body.get("action")
+    unloaded_asr = False
+    mem_adm: dict | None = None
     async with _llm_lock:
         if act == "start":
             st = await local_llm_status()
@@ -3006,6 +3317,22 @@ async def local_llm_action(request: Request, body: dict = Body(...)):
             cmd, runnable = _local_llm_launch()
             if not runnable or not cmd:
                 raise HTTPException(400, "未找到本地大模型启动脚本，请先完成本地模型部署")
+            mem_adm = await asyncio.to_thread(
+                runtime_telemetry.check_memory_admission,
+                need_bytes=4 * 1024**3,
+                label="local-llm",
+            )
+            if not mem_adm.get("ok", True):
+                with _inflight_lock:
+                    has_inflight = bool(_inflight)
+                if not LIVE and not has_inflight and not ambient.enabled and not ambient.cfg.get("enabled"):
+                    await asyncio.to_thread(engine.unload, "all")
+                    unloaded_asr = True
+                    mem_adm = await asyncio.to_thread(
+                        runtime_telemetry.check_memory_admission,
+                        need_bytes=4 * 1024**3,
+                        label="local-llm",
+                    )
             port = re.search(r":(\d+)", _local_url().split("//", 1)[-1])
             env = {**os.environ, "PORT": port.group(1) if port else "8090"}
             popen_kw: dict = {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {"start_new_session": True}
@@ -3022,7 +3349,11 @@ async def local_llm_action(request: Request, body: dict = Body(...)):
             await asyncio.to_thread(_stop_local_llm)
         else:
             raise HTTPException(400, "未知操作")
-    return await local_llm_status()
+    resp = await local_llm_status()
+    if act == "start":
+        resp["unloaded_asr"] = unloaded_asr
+        resp["memory"] = mem_adm
+    return resp
 
 
 # ---------------- 搜索 ----------------
@@ -3255,6 +3586,23 @@ async def _housekeeping():
     while True:
         await asyncio.sleep(60)
         try:
+            await asyncio.to_thread(store.sweep_pending_deletes)
+            await asyncio.to_thread(worker_pool.default_pool().close_idle)
+            idle_unload_s = float(os.environ.get("MEETING_ASR_IDLE_UNLOAD_S") or 0)
+            if idle_unload_s > 0:
+                with _inflight_lock:
+                    has_inflight = bool(_inflight)
+                if (
+                    not LIVE
+                    and not has_inflight
+                    and not ambient.enabled
+                    and not ambient.cfg.get("enabled")
+                    and not engine.loading
+                    and engine.ready
+                    and hasattr(engine, "idle_seconds")
+                    and engine.idle_seconds() >= idle_unload_s
+                ):
+                    await asyncio.to_thread(engine.unload, "all")
             cfg = ambient.cfg
             if time.time() - last_purge > 3600:
                 last_purge = time.time()

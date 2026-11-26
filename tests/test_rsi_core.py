@@ -924,6 +924,268 @@ def test_retranscribe_with_rsi_exclude_clears_speaker_meta():
         assert "2" not in (meta_priv.get("speakers") or {})
 
 
+def test_global_rename_and_clear_do_not_trigger_override_sentinel():
+    """P0 回归测试：全局人物改名/合并与全局清除不得误触发 override 哨兵抬高阈值或关闭 auto_name。"""
+    with _isolated_data():
+        v0 = _basis(64, 0)
+        # 先人工建档 2 场
+        for i in range(2):
+            m = store.create(title=f"人工命名会{i}", status="ready", speakers={"0": "王昌恺"})
+            embs = _make_spk_embs(v0 + 0.01 * _basis(64, i + 1))
+            store.save(m["id"], "spk_embs.json", embs)
+            voiceprints.enroll(m["id"], "0", "王昌恺", embs)
+
+        # 再构造 6 场由声纹自动命名的会议（未手工改过）
+        auto_mids: list[str] = []
+        for i in range(6):
+            m = store.create(
+                title=f"自动会{i}",
+                status="ready",
+                speakers={"0": "王昌恺"},
+                speaker_meta={
+                    "auto": {"0": {"name": "王昌恺", "score": 0.91, "margin": 0.4, "source": "voiceprint_auto"}},
+                    "suggest": {},
+                    "merge_hints": [],
+                },
+            )
+            store.save(m["id"], "spk_embs.json", _make_spk_embs(v0 + 0.02 * _basis(64, i + 10)))
+            voiceprints.record_auto_named(m["id"])
+            auto_mids.append(m["id"])
+
+        res = app.rename_person_api({"old_name": "王昌恺", "new_name": "Jbos"})
+        assert res["ok"] is True and res["meetings_updated"] == 8
+        # 声纹应迁移至 Jbos，且仅保留人工建档的 2 场，不把 6 场未核验自动命名批量灌入
+        assert voiceprints.person_session_count("王昌恺") == 0
+        assert voiceprints.person_session_count("Jbos") == 2
+        # 不得产生任何 override，不得抬高 tau_auto，不得关闭 auto_name
+        assert voiceprints._load_db()["overrides"] == []
+        assert voiceprints.summary()["tau_auto"] == voiceprints.DEFAULT_TAU_AUTO
+        assert rsi_events.get_config()["auto_name"] is True
+        assert all(store.get(mid)["speakers"]["0"] == "Jbos" for mid in auto_mids)
+
+        # 全局清除带多场自动命名的人物，同样不得误伤全局哨兵
+        v1 = _basis(64, 3)
+        for i in range(4):
+            m = store.create(
+                title=f"待清自动会{i}",
+                status="ready",
+                speakers={"0": "临时访客"},
+                speaker_meta={
+                    "auto": {"0": {"name": "临时访客", "score": 0.88, "margin": 0.3, "source": "voiceprint_auto"}},
+                    "suggest": {},
+                    "merge_hints": [],
+                },
+            )
+            store.save(m["id"], "spk_embs.json", _make_spk_embs(v1))
+            voiceprints.record_auto_named(m["id"])
+        voiceprints.enroll("manual_guest", "0", "临时访客", _make_spk_embs(v1))
+        clr = app.clear_person_api({"name": "临时访客"})
+        assert clr["ok"] is True and clr["meetings_updated"] == 4
+        assert voiceprints._load_db()["overrides"] == []
+        assert voiceprints.summary()["tau_auto"] == voiceprints.DEFAULT_TAU_AUTO
+        assert rsi_events.get_config()["auto_name"] is True
+
+        # 但单场纠错（reassign_person_meeting_api）仍应正常记录 override 并可触发哨兵
+        for i in range(2):
+            m = store.create(
+                title=f"单场错认{i}",
+                status="ready",
+                speakers={"0": "Jbos"},
+                speaker_meta={
+                    "auto": {"0": {"name": "Jbos", "score": 0.85, "margin": 0.25, "source": "voiceprint_auto"}},
+                    "suggest": {},
+                    "merge_hints": [],
+                },
+            )
+            store.save(m["id"], "spk_embs.json", _make_spk_embs(_basis(64, 20 + i)))
+            voiceprints.record_auto_named(m["id"])
+            app.reassign_person_meeting_api({"mid": m["id"], "old_name": "Jbos", "new_name": f"别人{i}"})
+        assert len(voiceprints._load_db()["overrides"]) == 2
+        assert voiceprints.summary()["tau_auto"] == 0.72
+
+
+def test_tau_auto_gradual_recovery_and_cluster_suggestions():
+    """P1 测试：tau_auto 连续无撤回自动回落 + 跨会未命名簇二次合并与已知人物建议。"""
+    with _isolated_data():
+        # 1) 抬高 tau_auto 后，连续 10 场独立自动命名无撤回 -> 回落 0.02；重复 mid 不重复计数；撤回清零连胜
+        db = voiceprints._load_db()
+        db["tau_auto"] = 0.72
+        voiceprints._save_db(db)
+
+        for i in range(5):
+            r = voiceprints.record_auto_named(f"clean_a_{i}")
+            assert r["recovered"] is False
+        assert voiceprints.summary()["clean_auto_streak"] == 5
+
+        # 重复同一 mid 不增加连胜
+        voiceprints.record_auto_named("clean_a_4")
+        assert voiceprints.summary()["clean_auto_streak"] == 5
+
+        # 中途发生一次 override，连胜清零
+        voiceprints.record_override("clean_a_4", 0, "张三", "李四")
+        assert voiceprints.summary()["clean_auto_streak"] == 0
+        assert voiceprints.summary()["tau_auto"] == 0.72
+
+        # 再次连续 9 场不触发，第 10 场回落 0.72 -> 0.70 并记入 registry
+        for i in range(9):
+            assert voiceprints.record_auto_named(f"clean_b_{i}")["recovered"] is False
+        assert voiceprints.summary()["tau_auto"] == 0.72
+        rec1 = voiceprints.record_auto_named("clean_b_9")
+        assert rec1["recovered"] is True and rec1["from"] == 0.72 and rec1["to"] == 0.70
+        assert voiceprints.summary()["tau_auto"] == 0.70
+        assert voiceprints.summary()["clean_auto_streak"] == 0
+        assert any(r.get("action") == "recover_tau_auto" for r in rsi_events.get_registry())
+
+        # 再来 10 场回落到 0.68（默认下限），之后不再继续下降
+        for i in range(10):
+            voiceprints.record_auto_named(f"clean_c_{i}")
+        assert voiceprints.summary()["tau_auto"] == voiceprints.DEFAULT_TAU_AUTO
+        for i in range(12):
+            assert voiceprints.record_auto_named(f"clean_d_{i}")["recovered"] is False
+        assert voiceprints.summary()["tau_auto"] == voiceprints.DEFAULT_TAU_AUTO
+
+        # 2) cluster_unnamed_speakers：已知人物 suggested_match + 隐私排除校验
+        v_alice = _basis(64, 1)
+        v_bob = _basis(64, 2)
+        voiceprints.enroll("hist_a1", 0, "爱丽丝", _make_spk_embs(v_alice))
+        voiceprints.enroll("hist_a2", 0, "爱丽丝", _make_spk_embs(v_alice + 0.02 * _basis(64, 9)))
+
+        m1 = store.create(title="周会1", status="ready")
+        m2 = store.create(title="周会2", status="ready")
+        m3 = store.create(title="私密会", status="ready", rsi_exclude=True)
+        for mid, vec, txt in [
+            (m1["id"], v_alice + 0.03 * _basis(64, 5), "我们今天把接口文档对齐一下吧"),
+            (m2["id"], v_alice + 0.04 * _basis(64, 6), "昨天那个排期方案我已经更新好了"),
+            (m3["id"], v_bob, "私密内容不参与学习"),
+        ]:
+            store.save(mid, "spk_embs.json", _make_spk_embs(vec, voiced_s=35.0, n_chunks=15, intra=0.85))
+            store.save(mid, "transcript.json", {
+                "paragraphs": [{"spk": 0, "start": 0, "end": 5000, "text": txt}]
+            })
+
+        cl = voiceprints.cluster_unnamed_speakers(days=14)
+        assert len(cl["clusters"]) == 1
+        top = cl["clusters"][0]
+        assert top["meeting_count"] == 2
+        assert top["suggested_match"] is not None
+        assert top["suggested_match"]["name"] == "爱丽丝"
+        assert top["suggested_match"]["score"] >= 0.90
+        assert top["suggested_match"]["high_confidence"] is True
+
+        # batch_name_cluster 对正常会议可批量改名并入库，对 rsi_exclude 会议只改名、不入声纹库
+        bres_ok = voiceprints.batch_name_cluster("爱丽丝", [{"mid": m1["id"], "spk": "0"}, {"mid": m2["id"], "spk": "0"}])
+        assert bres_ok["updated_meetings"] == 2 and bres_ok["enrolled"] == 2
+        bres = voiceprints.batch_name_cluster("鲍勃", [{"mid": m3["id"], "spk": "0"}])
+        assert bres["updated_meetings"] == 1 and bres["enrolled"] == 0 and bres["skipped"] == 1
+        assert voiceprints.person_session_count("鲍勃") == 0
+
+        # 3) 共现同事防误判 + 单人声纹库门槛校准：
+        #    同室同事与爱丽丝共现（cosine ~0.76，低于 MERGE_HINT_COS）绝不应被误标为「疑似爱丽丝」
+        v_colleague = 0.76 * v_alice + 0.65 * _basis(64, 15)
+        for i in range(2):
+            mc = store.create(title=f"共现会{i}", status="ready", speakers={"1": "爱丽丝"})
+            store.save(mc["id"], "spk_embs.json", {
+                "speakers": {
+                    "0": {"centroid": (v_colleague / np.linalg.norm(v_colleague)).tolist(), "voiced_s": 30.0, "n_chunks": 12, "intra_cos_mean": 0.88},
+                    "1": {"centroid": v_alice.tolist(), "voiced_s": 30.0, "n_chunks": 12, "intra_cos_mean": 0.90},
+                }
+            })
+            store.save(mc["id"], "transcript.json", {
+                "paragraphs": [{"spk": 0, "start": 0, "end": 4000, "text": "我是另一位同事在同步进度"}]
+            })
+        cl2 = voiceprints.cluster_unnamed_speakers(days=14)
+        colleague_clusters = [c for c in cl2["clusters"] if any(m["title"].startswith("共现会") for m in c["members"])]
+        assert len(colleague_clusters) == 1
+        assert colleague_clusters[0]["suggested_match"] is None, colleague_clusters[0]["suggested_match"]
+
+        # 单人声纹库、无共现、余弦 0.70（低于 0.74 单人建议底线）-> 不推荐；余弦 0.755 -> 仅低把握建议
+        v_low = 0.70 * v_alice + 0.714 * _basis(64, 17)
+        for i in range(2):
+            ml = store.create(title=f"低相似会{i}", status="ready")
+            store.save(ml["id"], "spk_embs.json", _make_spk_embs(v_low, voiced_s=28.0, n_chunks=12, intra=0.86))
+            store.save(ml["id"], "transcript.json", {
+                "paragraphs": [{"spk": 0, "start": 0, "end": 4000, "text": "单人声纹库下的低相似度测试"}]
+            })
+        v_mid = 0.755 * v_alice + 0.655 * _basis(64, 18)
+        for i in range(2):
+            mm = store.create(title=f"中相似会{i}", status="ready")
+            store.save(mm["id"], "spk_embs.json", _make_spk_embs(v_mid, voiced_s=28.0, n_chunks=12, intra=0.86))
+            store.save(mm["id"], "transcript.json", {
+                "paragraphs": [{"spk": 0, "start": 0, "end": 4000, "text": "单人声纹库下的中等相似度测试"}]
+            })
+        cl3 = voiceprints.cluster_unnamed_speakers(days=14)
+        low_clusters = [c for c in cl3["clusters"] if any(m["title"].startswith("低相似会") for m in c["members"])]
+        mid_clusters = [c for c in cl3["clusters"] if any(m["title"].startswith("中相似会") for m in c["members"])]
+        assert len(low_clusters) == 1 and low_clusters[0]["suggested_match"] is None
+        assert len(mid_clusters) == 1
+        assert mid_clusters[0]["suggested_match"] is not None
+        assert mid_clusters[0]["suggested_match"]["name"] == "爱丽丝"
+        assert mid_clusters[0]["suggested_match"]["high_confidence"] is False
+
+
+def test_loop_d_acoustic_profile_linkage_and_sensitivity_guidance():
+    """P2 测试：Loop D 环境底噪 p10_db 与 VAD 空触发率联动给出灵敏度建议，不静默篡改配置。"""
+    with _isolated_data():
+        # 1) 嘈杂环境 + 高 VAD 空触发率 + sensitivity="high" -> 建议降至 "normal"
+        for _ in range(12):
+            rsi_ambient.record_noise_floor("Office Mic", -34.0)
+            rsi_ambient.record_conv_vad("Office Mic", 10000, 4500)  # false_ratio = 0.55
+        adv_noisy = rsi_ambient.advice(20.0, current_sensitivity="high", device="Office Mic")
+        assert adv_noisy["environment"] == "noisy"
+        assert adv_noisy["suggested_sensitivity"] == "normal"
+        assert "标准" in adv_noisy["sensitivity_reason"]
+
+        # sensitivity="max" 降一档到 "high"
+        adv_max = rsi_ambient.advice(20.0, current_sensitivity="max", device="Office Mic")
+        assert adv_max["suggested_sensitivity"] == "high"
+
+        # 已经是 "normal" 时不再建议更低
+        adv_norm = rsi_ambient.advice(20.0, current_sensitivity="normal", device="Office Mic")
+        assert adv_norm["suggested_sensitivity"] is None
+
+        # 显式指定未采样的其它设备时，不得错用其他设备画像
+        adv_other = rsi_ambient.advice(20.0, current_sensitivity="high", device="Brand New USB Mic")
+        assert adv_other["environment"] == "unknown"
+        assert adv_other["suggested_sensitivity"] is None
+
+        # 重置 VAD 统计窗口后（调整灵敏度场景），保留底噪 p10_db 但清空旧灵敏度空触发率
+        rsi_ambient.reset_vad_stats("Office Mic")
+        adv_after_reset = rsi_ambient.advice(20.0, current_sensitivity="high", device="Office Mic")
+        assert adv_after_reset["p10_db"] == -34.0
+        assert adv_after_reset["vad_false_ratio"] is None
+
+        # 滑动窗口：50 场新低误触对话能覆盖旧高误触历史，不会被终身累计永久锁死
+        for _ in range(12):
+            rsi_ambient.record_conv_vad("Slide Mic", 10000, 3000)  # 0.70
+        for _ in range(rsi_ambient.MAX_VAD_SAMPLES):
+            rsi_ambient.record_conv_vad("Slide Mic", 10000, 9000)  # 0.10
+        adv_slide = rsi_ambient.advice(20.0, current_sensitivity="high", device="Slide Mic")
+        assert adv_slide["vad_false_ratio"] == 0.1
+        assert adv_slide["suggested_sensitivity"] is None
+
+        # 2) 安静环境 + 低 VAD 空触发率 + 有恢复记录 + sensitivity="normal" -> 建议升至 "high"
+        rsi_ambient.reset()
+        for _ in range(12):
+            rsi_ambient.record_noise_floor("Quiet Mic", -55.0)
+            rsi_ambient.record_conv_vad("Quiet Mic", 10000, 9200)  # false_ratio = 0.08
+        rsi_ambient.record_discard_outcome("qr1", 12.0, 20.0, "restored", device="Quiet Mic")
+        adv_quiet = rsi_ambient.advice(20.0, current_sensitivity="normal", device="Quiet Mic")
+        assert adv_quiet["environment"] == "quiet"
+        assert adv_quiet["suggested_sensitivity"] == "high"
+        assert "高" in adv_quiet["sensitivity_reason"]
+
+        # 3) 适中环境 + 正常空触发率 -> 无调整建议，但输出清晰声学画像摘要
+        rsi_ambient.reset()
+        for _ in range(12):
+            rsi_ambient.record_noise_floor("default", -48.0)
+            rsi_ambient.record_conv_vad("default", 10000, 7200)  # false_ratio = 0.28
+        sm = rsi_ambient.summary(20.0, current_sensitivity="high", device="")
+        assert sm["advice"]["environment"] == "moderate"
+        assert sm["advice"]["suggested_sensitivity"] is None
+        assert "-48.0 dB" in sm["advice"]["sensitivity_reason"]
+        assert "适配良好" in sm["advice"]["sensitivity_reason"]
+
+
 if __name__ == "__main__":
     for _name, _fn in list(globals().items()):
         if _name.startswith("test_") and callable(_fn):

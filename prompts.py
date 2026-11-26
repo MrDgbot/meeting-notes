@@ -1,4 +1,5 @@
 """纪要模板与提示词。"""
+import text_matching
 import vocab
 from asr_engine import fmt_ts
 
@@ -118,11 +119,13 @@ def context_header(meta: dict, notes: str) -> str:
 def chunk_lines(lines: list[str], max_chars: int) -> list[list[str]]:
     chunks, cur, n = [], [], 0
     for ln in lines:
-        if cur and n + len(ln) > max_chars:
-            chunks.append(cur)
-            cur, n = [], 0
-        cur.append(ln)
-        n += len(ln) + 1
+        parts = text_matching.split_text_safe(ln, max_chars) if max_chars > 0 and len(ln) > max_chars else [ln]
+        for part in parts:
+            if cur and n + len(part) > max_chars:
+                chunks.append(cur)
+                cur, n = [], 0
+            cur.append(part)
+            n += len(part) + 1
     if cur:
         chunks.append(cur)
     return chunks
@@ -206,8 +209,7 @@ SPK_NAME_PROMPT = """下面是一场会议的转写稿，每行是 [时间] 说�
 
 
 def _norm(s: str) -> str:
-    import re
-    return re.sub(r"[\W_]+", "", s or "").lower()
+    return text_matching.spoken_normalize(s or "")[0]
 
 
 def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) -> list[dict]:
@@ -216,7 +218,7 @@ def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) 
     只有别人提到这个名字的不算（实测模型会把“跟某某说的”这种转述当成线索）。同一个编号或同一个名字出现多次时，只留证据多的那个。"""
     import re
     spks = {p["spk"] for p in paras}
-    norm_paras = [_norm(p.get("text") or "") for p in paras]
+    norm_paras = [text_matching.spoken_normalize(p.get("text") or "")[0] for p in paras]
     out = []
     for c in raw if isinstance(raw, list) else []:
         if not isinstance(c, dict):
@@ -234,7 +236,7 @@ def check_name_candidates(raw: list, paras: list[dict], window_ms: int = 90000) 
             if not isinstance(e, dict):
                 continue
             m = re.fullmatch(r"\s*(?:(\d+):)?(\d{1,2}):(\d{2})\s*", str(e.get("ts") or ""))
-            q = _norm(e.get("quote"))
+            q, _ = text_matching.spoken_normalize(str(e.get("quote") or ""))
             if not m or len(q) < 4:
                 continue
             ms = ((int(m.group(1) or 0) * 60 + int(m.group(2))) * 60 + int(m.group(3))) * 1000

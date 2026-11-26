@@ -1,5 +1,6 @@
 """FunASR 封装：会后整段转写（含说话人分离）+ 会中实时转写（流式 VAD + 分段识别）。"""
 import bisect
+import gc
 import json
 import logging
 import os
@@ -17,9 +18,13 @@ import numpy as np
 import soundfile as sf
 import torch
 
+import audio_utils
 import diar_overlap
 import dual_audio
+import model_manager
 import repetition
+import runtime_telemetry
+import worker_pool
 from funasr import AutoModel
 from funasr.models.campplus import cluster_backend as _cb
 from funasr.models.campplus.utils import postprocess as _sv_postprocess, sv_chunk as _sv_chunk
@@ -484,11 +489,14 @@ def _tmp_audio_path(dst: Path, suffix: str) -> Path:
 
 
 def to_wav16k(src: str | Path, dst: str | Path) -> None:
+    src_p = Path(src)
     dst_p = Path(dst)
+    if audio_utils.fast_to_wav16k(src_p, dst_p):
+        return
     tmp = _tmp_audio_path(dst_p, ".wav")
     try:
         p = subprocess.run(
-            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp)],
+            ["ffmpeg", "-loglevel", "error", "-y", "-i", str(src_p), "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", str(tmp)],
             capture_output=True, text=True, **_NO_WIN,
         )
         if p.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
@@ -567,12 +575,176 @@ def duration_of(path: Path) -> float:
 _OFFLINE_VADS: dict[tuple, object] = {}
 _OFFLINE_VAD_LOCK = threading.Lock()
 
+_ORIG_SUBPROCESS_RUN = subprocess.run
+_ORIG_DEFAULT_POOL = worker_pool.default_pool
+_ORIG_RUN_DIARIZER = worker_pool.WorkerPool.run_diarizer
+_ORIG_WORKER_RUN = worker_pool.PersistentJsonlWorker.run
+
+_CKPT_TURNS_NAME = ".transcribe_ckpt_turns.json"
+_CKPT_UNITS_NAME = ".transcribe_ckpt_units.jsonl"
+
+
+def _is_local_only(local_only: bool | None = None) -> bool:
+    if local_only is not None:
+        return bool(local_only)
+    return os.environ.get("MEETING_LOCAL_ONLY", "0") == "1"
+
+
+def _check_local_models(model_ids: list[str] | tuple[str, ...], local_only: bool | None = None) -> None:
+    if not _is_local_only(local_only):
+        return
+    missing = [mid for mid in model_ids if mid and not model_manager.is_model_ready(mid)]
+    if missing:
+        raise RuntimeError(
+            "离线模式已启用（MEETING_LOCAL_ONLY=1），本地缺少模型："
+            + "、".join(missing)
+            + "。请先下载或配置本地模型目录。"
+        )
+
+
+def _is_oom_error(exc: BaseException) -> bool:
+    cuda_oom = getattr(torch.cuda, "OutOfMemoryError", None)
+    if cuda_oom is not None and isinstance(exc, cuda_oom):
+        return True
+    msg = str(exc).lower()
+    return any(tok in msg for tok in (
+        "out of memory",
+        "mps backend out of memory",
+        "cuda error: out of memory",
+        "not enough memory",
+        "oom",
+    ))
+
+
+def _empty_device_cache(device: str | None = None) -> None:
+    dev = DEVICE if device is None else device
+    gc.collect()
+    if dev == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif dev == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+        torch.mps.empty_cache()
+
+
+def _write_json_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_audio_path(path, ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _cleanup_checkpoints(checkpoint_dir: Path | None) -> None:
+    if checkpoint_dir is None:
+        return
+    d = Path(checkpoint_dir)
+    for name in (_CKPT_TURNS_NAME, _CKPT_UNITS_NAME):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _load_turns_checkpoint(ckpt_dir: Path, wav_hash: str, diarizer: str, num_spk: int) -> dict | None:
+    path = ckpt_dir / _CKPT_TURNS_NAME
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if (
+        data.get("wav_hash") != wav_hash
+        or data.get("diarizer") != diarizer
+        or int(data.get("num_spk", -1)) != int(num_spk or 0)
+        or not isinstance(data.get("turns"), list)
+    ):
+        return None
+    return data
+
+
+def _save_turns_checkpoint(
+    ckpt_dir: Path,
+    wav_hash: str,
+    diarizer: str,
+    num_spk: int,
+    diarizer_used: str,
+    turns: list,
+    spk_embs: dict | None,
+) -> None:
+    payload = {
+        "version": 1,
+        "wav_hash": wav_hash,
+        "diarizer": diarizer,
+        "num_spk": int(num_spk or 0),
+        "diarizer_used": diarizer_used,
+        "turns": [[int(a), int(b), int(s)] for a, b, s in turns],
+        "last_spk_embs": spk_embs,
+    }
+    _write_json_atomic(ckpt_dir / _CKPT_TURNS_NAME, payload)
+
+
+def _load_units_checkpoint(ckpt_dir: Path, wav_hash: str, mode: str, hotword: str) -> dict[int, dict]:
+    path = ckpt_dir / _CKPT_UNITS_NAME
+    if not path.is_file():
+        return {}
+    resumed: dict[int, dict] = {}
+    saw_mismatch = False
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    # Truncated trailing line after a mid-run crash
+                    continue
+                if not isinstance(rec, dict) or "idx" not in rec:
+                    continue
+                if (
+                    rec.get("wav_hash") == wav_hash
+                    and rec.get("asr_mode") == mode
+                    and (rec.get("hotword") or "") == (hotword or "")
+                ):
+                    resumed[int(rec["idx"])] = rec
+                else:
+                    saw_mismatch = True
+    except OSError:
+        return {}
+    if saw_mismatch and not resumed:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return resumed
+
+
+def _append_unit_checkpoint(ckpt_dir: Path, record: dict) -> None:
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    path = ckpt_dir / _CKPT_UNITS_NAME
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
 
 class Engine:
-    def __init__(self):
-        self.full = None  # Paraformer 管线：VAD + ASR + 标点 + 说话人（Nano 模式下只用它切分说话人）
-        self.live_asr = None  # Paraformer 片段识别（仅 paraformer 模式按需加载；标点复用 full 的）
+    def __init__(self, local_only: bool | None = None):
+        self.full = None  # Paraformer 管线：VAD + ASR + 标点 + 说话人（按需懒加载）
+        self.live_asr = None  # Paraformer 片段识别（仅 paraformer 模式按需加载）
         self.nano = None  # Fun-ASR-Nano：片段识别 + 精准转写的文字（nano 模式）
+        self._punc_auto = None  # 拆分加载的 ct-punc（nano/doubao 模式不加载 paraformer-zh 权重）
+        self._spk_auto = None   # 拆分加载的 cam++ 声纹提取模型
+        self._cb_model = None   # 拆分加载的 ClusterBackend 聚类器
         self.ready = False
         self.error = ""
         self.loading = False
@@ -585,9 +757,91 @@ class Engine:
         self.load_lock = threading.Lock()
         self._state_lock = threading.Lock()  # “检查是否在加载 + 置上加载中”要一起做，防止连点重试时并发加载两遍
         self._last_trim = 0.0
+        self.last_active = time.monotonic()
+        self.last_timings: dict[str, float] = {}
+        self._transition_failure = ""
+        self.local_only = local_only
+        self._nano_device = DEVICE
+        self._last_diarizer_timings: tuple[float, float] | None = None
         self.last_info: dict = {}  # 最近一次会后转写用了什么引擎、云端失败几段等
         self.last_spk_embs: dict | None = None  # 最近一次说话人分离的 CAM++ 声纹质心（供 Loop A 跨会识人）
         self.common = dict(device=DEVICE, disable_update=True, disable_pbar=True, disable_log=True)
+
+    def _touch(self) -> None:
+        self.last_active = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        return max(0.0, time.monotonic() - getattr(self, "last_active", time.monotonic()))
+
+    def _require_local_models(self, model_ids: list[str] | tuple[str, ...]) -> None:
+        _check_local_models(model_ids, getattr(self, "local_only", None))
+
+    def _ensure_punc_auto(self):
+        if getattr(self, "full", None) is not None:
+            return self.full
+        if getattr(self, "_punc_auto", None) is None:
+            load_lock = getattr(self, "load_lock", None)
+            full_lock = getattr(self, "full_lock", None)
+            if load_lock is not None and full_lock is not None:
+                with load_lock, full_lock:
+                    if getattr(self, "_punc_auto", None) is None and getattr(self, "full", None) is None:
+                        self._require_local_models(["ct-punc"])
+                        self._punc_auto = AutoModel(model="ct-punc", **self.common)
+            else:
+                self._require_local_models(["ct-punc"])
+                self._punc_auto = AutoModel(model="ct-punc", **self.common)
+        return self._punc_auto
+
+    def _ensure_spk_auto(self):
+        if getattr(self, "full", None) is not None:
+            return self.full
+        if getattr(self, "_spk_auto", None) is None:
+            load_lock = getattr(self, "load_lock", None)
+            full_lock = getattr(self, "full_lock", None)
+            if load_lock is not None and full_lock is not None:
+                with load_lock, full_lock:
+                    if getattr(self, "_spk_auto", None) is None and getattr(self, "full", None) is None:
+                        self._require_local_models(["cam++"])
+                        self._spk_auto = AutoModel(model="cam++", **self.common)
+            else:
+                self._require_local_models(["cam++"])
+                self._spk_auto = AutoModel(model="cam++", **self.common)
+        return self._spk_auto
+
+    def _ensure_full(self):
+        if getattr(self, "full", None) is None:
+            with self.load_lock, self.full_lock:
+                if getattr(self, "full", None) is None:
+                    self._require_local_models(["paraformer-zh", "fsmn-vad", "ct-punc", "cam++"])
+                    self.full = AutoModel(
+                        model="paraformer-zh", vad_model="fsmn-vad",
+                        punc_model="ct-punc", spk_model="cam++", **self.common,
+                    )
+        return self.full
+
+    def _punc_backend(self):
+        full = getattr(self, "full", None)
+        if full is not None:
+            return full, getattr(full, "punc_model", None), getattr(full, "punc_kwargs", None)
+        punc_auto = self._ensure_punc_auto()
+        return punc_auto, getattr(punc_auto, "model", None), getattr(punc_auto, "kwargs", None)
+
+    def _spk_backend(self):
+        full = getattr(self, "full", None)
+        if full is not None:
+            return full, getattr(full, "spk_model", None), getattr(full, "spk_kwargs", None)
+        spk_auto = self._ensure_spk_auto()
+        return spk_auto, getattr(spk_auto, "model", None), getattr(spk_auto, "kwargs", None)
+
+    def _cb_backend(self):
+        full = getattr(self, "full", None)
+        if full is not None:
+            return full.cb_model
+        cb = getattr(self, "_cb_model", None)
+        if cb is None:
+            cb = _cb.ClusterBackend().to(DEVICE)
+            self._cb_model = cb
+        return cb
 
     def load(self):
         """加载语音模型。启动时调用一次；加载失败后可从网页上点“重试”再调用。"""
@@ -595,21 +849,88 @@ class Engine:
             if self.loading or self.ready:
                 return
             self.loading, self.error = True, ""
+        self._touch()
         try:
             t = time.time()
-            if self.full is None:
-                self.full = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc",
-                                      spk_model="cam++", **self.common)
-            self.ensure(asr_mode())
-            self._get_offline_vad(None)
+            mode = asr_mode()
+            if mode in ("nano", "doubao"):
+                self._ensure_punc_auto()
+                self._ensure_spk_auto()
+                self._cb_backend()
+            else:
+                self._ensure_full()
+            self.ensure(mode)
+            self._get_offline_vad(None, local_only=getattr(self, "local_only", None))
             self.trim(force=True)
             self.ready = True
-            log.info("ASR models ready on %s in %.1fs (mode=%s)", DEVICE, time.time() - t, asr_mode())
+            self._transition_failure = ""
+            self._touch()
+            log.info("ASR models ready on %s in %.1fs (mode=%s)", DEVICE, time.time() - t, mode)
         except Exception as e:  # noqa: BLE001
             self.error = str(e) or type(e).__name__
+            self._transition_failure = self.error
             log.exception("ASR load failed")
         finally:
             self.loading = False
+
+    def unload(self, target: str = "all") -> dict:
+        """显式卸载指定或全部本地模型并释放进程/GPU 缓存。"""
+        valid_targets = ("all", "nano", "live_asr", "paraformer", "diarizers")
+        if target not in valid_targets:
+            raise ValueError(f"Unknown unload target: {target!r}")
+        unloaded: list[str] = []
+        err_msg = ""
+        with self.load_lock, self.full_lock:
+            if target in ("all", "nano"):
+                if getattr(self, "nano", None) is not None:
+                    self.nano = None
+                    unloaded.append("nano")
+                self.nano_error = ""
+                self._nano_device = DEVICE
+            if target in ("all", "live_asr"):
+                if getattr(self, "live_asr", None) is not None:
+                    self.live_asr = None
+                    unloaded.append("live_asr")
+            if target in ("all", "paraformer"):
+                if getattr(self, "full", None) is not None:
+                    self.full = None
+                    unloaded.append("paraformer")
+            if target == "all":
+                if getattr(self, "_punc_auto", None) is not None:
+                    self._punc_auto = None
+                    unloaded.append("punc_auto")
+                with _OFFLINE_VAD_LOCK:
+                    if _OFFLINE_VADS:
+                        _OFFLINE_VADS.clear()
+                        unloaded.append("offline_vads")
+                self.ready = False
+            if target in ("all", "diarizers"):
+                if getattr(self, "_spk_auto", None) is not None:
+                    self._spk_auto = None
+                    unloaded.append("spk_auto")
+                if getattr(self, "_cb_model", None) is not None:
+                    self._cb_model = None
+                    unloaded.append("cb_model")
+                try:
+                    worker_pool.default_pool().close_all()
+                    unloaded.append("diarizers")
+                except Exception as e:  # noqa: BLE001
+                    err_msg = f"{type(e).__name__}: {e}"
+                    log.exception("Failed closing diarizer worker pool during unload")
+            try:
+                _empty_device_cache(DEVICE)
+            except Exception as e:  # noqa: BLE001
+                if not err_msg:
+                    err_msg = f"{type(e).__name__}: {e}"
+                log.exception("Failed emptying device cache during unload")
+            self._transition_failure = err_msg
+        res: dict = {
+            "unloaded": unloaded,
+            "memory": runtime_telemetry.host_memory_status(),
+        }
+        if err_msg:
+            res["error"] = err_msg
+        return res
 
     def state_info(self) -> dict:
         """语音模型的两个状态机（只读）：主模型 idle → loading → ready / error（error 可重试回 loading）；
@@ -632,10 +953,43 @@ class Engine:
             nano = "unloaded"
         return {"main": main, "error": self.error, "nano": nano, "nano_error": self.nano_error}
 
+    def _move_nano_to_cpu(self) -> bool:
+        nano = getattr(self, "nano", None)
+        if nano is None:
+            return False
+        moved = False
+        if hasattr(nano, "to") and callable(nano.to):
+            nano.to("cpu")
+            moved = True
+        inner = getattr(nano, "model", None)
+        if inner is not None and hasattr(inner, "to") and callable(inner.to):
+            inner.to("cpu")
+            moved = True
+        kw = getattr(nano, "kwargs", None)
+        if isinstance(kw, dict):
+            kw["device"] = "cpu"
+            moved = True
+        base_map = getattr(nano, "_base_kwargs_map", None)
+        if isinstance(base_map, dict):
+            base_kw = base_map.get("kwargs")
+            if isinstance(base_kw, dict):
+                base_kw["device"] = "cpu"
+        if moved:
+            self._nano_device = "cpu"
+        return moved
+
+    def _reload_nano_on_cpu(self) -> None:
+        self._require_local_models([NANO])
+        common = dict(getattr(self, "common", dict(device="cpu", disable_update=True, disable_pbar=True, disable_log=True)))
+        common["device"] = "cpu"
+        self.nano = AutoModel(model=NANO, **common)
+        self._nano_device = "cpu"
+
     def ensure(self, mode: str, force: bool = False) -> str:
         """按需加载本机识别模型；Nano 加载失败时退回 Paraformer。返回实际可用的本机模式。
         豆包模式下实时出字和失败回退都用本机 Nano。
         Nano 加载失败一次后不再自动重试（否则每识别一句都要重新加载、占着 GPU 锁），force=True 时才重试。"""
+        self._touch()
         if mode == "doubao":
             mode = "nano"
         if mode == "nano" and self.nano is None and self.nano_error and not force:
@@ -644,9 +998,31 @@ class Engine:
             if mode == "nano" and self.nano is None:
                 self.nano_loading = True
                 try:
+                    adm = runtime_telemetry.check_memory_admission(need_bytes=3 * 1024**3, label="Fun-ASR-Nano")
+                    if not adm.get("ok", True):
+                        warn = adm.get("warning") or "可用内存较低，加载 Fun-ASR-Nano 可能受限"
+                        log.warning("%s", warn)
+                        self.last_info["memory_warning"] = warn
+                    self._require_local_models([NANO])
                     t = time.time()
                     self.nano = AutoModel(model=NANO, **self.common)
-                    self.nano.generate(input=torch.zeros(SR), language="中文", itn=True)  # 预热
+                    self._nano_device = self.common.get("device", DEVICE)
+                    try:
+                        self.nano.generate(input=torch.zeros(SR), language="中文", itn=True)  # 预热
+                    except RuntimeError as oom_exc:
+                        if _is_oom_error(oom_exc) and getattr(self, "_nano_device", DEVICE) != "cpu":
+                            log.warning("Fun-ASR-Nano warmup OOM on %s, falling back to CPU", self._nano_device)
+                            _empty_device_cache(self._nano_device)
+                            try:
+                                if not self._move_nano_to_cpu():
+                                    self._reload_nano_on_cpu()
+                                self.nano.generate(input=torch.zeros(SR), language="中文", itn=True)
+                            except RuntimeError:
+                                self._reload_nano_on_cpu()
+                                self.nano.generate(input=torch.zeros(SR), language="中文", itn=True)
+                            self.last_info["oom_fallback"] = "cpu"
+                        else:
+                            raise
                     self.nano_error = ""
                     log.info("Fun-ASR-Nano loaded in %.1fs", time.time() - t)
                 except Exception as e:  # noqa: BLE001
@@ -658,6 +1034,7 @@ class Engine:
             if mode == "nano" and self.nano is not None:
                 return "nano"
             if self.live_asr is None:
+                self._require_local_models(["paraformer-zh"])
                 self.live_asr = AutoModel(model="paraformer-zh", **self.common)
                 self.live_asr.generate(input=np.zeros(SR, dtype=np.float32))
             return "paraformer"
@@ -665,26 +1042,28 @@ class Engine:
     @staticmethod
     def new_vad(max_end_silence_time: int = 500, max_single_segment_time: int = 20000, **kw):
         """kw 可传 speech_noise_thres（越小越灵敏，模型默认 0.6）。"""
+        _check_local_models(["fsmn-vad"])
         return AutoModel(model="fsmn-vad", max_end_silence_time=max_end_silence_time,
                          max_single_segment_time=max_single_segment_time, device="cpu",
                          disable_update=True, disable_pbar=True, disable_log=True, **kw)
 
     @staticmethod
-    def _get_offline_vad(vad_kw: dict | None = None):
+    def _get_offline_vad(vad_kw: dict | None = None, *, local_only: bool | None = None):
         kw = dict(vad_kw or {})
         key = tuple(sorted(kw.items()))
         with _OFFLINE_VAD_LOCK:
             vad = _OFFLINE_VADS.get(key)
             if vad is None:
+                _check_local_models(["fsmn-vad"], local_only=local_only)
                 vad = AutoModel(model="fsmn-vad", max_single_segment_time=30000, device="cpu",
                                 disable_update=True, disable_pbar=True, disable_log=True, **kw)
                 _OFFLINE_VADS[key] = vad
             return vad
 
     @staticmethod
-    def _offline_segs(x: np.ndarray, vad_kw: dict | None = None) -> list:
+    def _offline_segs(x: np.ndarray, vad_kw: dict | None = None, *, local_only: bool | None = None) -> list:
         """整段音频的语音段 [[开始ms, 结束ms]]。缓存 CPU 离线 VAD 模型避免每次转写重载（保持 FunASR 默认 dynamic_silence 行为不变，见 docs/direction-evidence.md）。"""
-        vad = Engine._get_offline_vad(vad_kw)
+        vad = Engine._get_offline_vad(vad_kw, local_only=local_only)
         with _OFFLINE_VAD_LOCK:
             return vad.generate(input=x)[0]["value"]
 
@@ -708,12 +1087,78 @@ class Engine:
         if not raw:
             return text
         try:
+            runner, punc_model, punc_kwargs = self._punc_backend()
             with self.punc_lock:
-                return self.full.inference(raw, model=self.full.punc_model, kwargs=self.full.punc_kwargs)[0]["text"]
+                if punc_model is not None or punc_kwargs is not None:
+                    return runner.inference(raw, model=punc_model, kwargs=punc_kwargs)[0]["text"]
+                return runner.inference(raw)[0]["text"]
         except Exception:  # noqa: BLE001
             return text
 
+    def _nano_generate_with_oom_fallback(self, x: torch.Tensor, kw: dict, ctx: str):
+        def _run_generate():
+            model = getattr(self.nano, "model", None)
+            orig = getattr(model, "get_prompt", None) if model is not None and ctx else None
+            if orig:
+                def get_prompt(hotwords, language=None, itn=True):
+                    return apply_nano_context(orig(hotwords if hotwords else [], language, itn), ctx)
+                model.get_prompt = get_prompt
+            try:
+                return self.nano.generate(input=x, language="中文", itn=True, **kw)
+            finally:
+                if orig:
+                    model.get_prompt = orig
+
+        try:
+            return _run_generate()
+        except RuntimeError as exc:
+            cur_dev = getattr(self, "_nano_device", DEVICE)
+            if not _is_oom_error(exc) or cur_dev == "cpu":
+                raise
+            log.warning("Fun-ASR-Nano OOM on %s, emptying cache and falling back to CPU", cur_dev)
+            _empty_device_cache(cur_dev)
+            try:
+                moved = self._move_nano_to_cpu()
+                if moved:
+                    try:
+                        raw = _run_generate()
+                        if isinstance(getattr(self, "last_info", None), dict):
+                            self.last_info["oom_fallback"] = "cpu"
+                        return raw
+                    except RuntimeError as retry_exc:
+                        if not _is_oom_error(retry_exc):
+                            raise
+                self._reload_nano_on_cpu()
+                raw = _run_generate()
+                if isinstance(getattr(self, "last_info", None), dict):
+                    self.last_info["oom_fallback"] = "cpu"
+                return raw
+            except Exception:
+                raise
+
     def _nano(self, audio: np.ndarray, hotword: str = "", context: str = "") -> dict:
+        use_cache = os.environ.get("MEETING_ASR_CACHE", "1") != "0" and context == ""
+        cache = None
+        cache_key = None
+        if use_cache:
+            try:
+                cache = audio_utils.AsrSegmentCache()
+                cache_key = cache.make_key("fun-asr-nano", "v1", hotword, audio_utils.audio_sha256(audio))
+                cached = cache.get(cache_key)
+                if isinstance(cached, dict) and str(cached.get("text") or "").strip():
+                    present_cached = cached.get("ctc_present") or []
+                    if present_cached:
+                        try:
+                            import rsi_vocab
+                            rsi_vocab.record_ctc_result(list(present_cached), [])
+                        except Exception:  # noqa: BLE001
+                            log.debug("rsi_vocab record_ctc_result failed", exc_info=True)
+                    return {"text": str(cached["text"]), "timestamps": list(cached.get("timestamps") or [])}
+            except Exception:  # noqa: BLE001
+                log.debug("ASR segment cache lookup failed", exc_info=True)
+                cache = None
+                cache_key = None
+
         hws = hotword_list(hotword)
 
         def once(with_hw: bool, with_ctx: bool, limit: int) -> dict:
@@ -723,17 +1168,7 @@ class Engine:
             if with_hw and hws:
                 kw["hotwords"] = hws
             with self.nano_lock:
-                model = getattr(self.nano, "model", None)
-                orig = getattr(model, "get_prompt", None) if model is not None and ctx else None
-                if orig:
-                    def get_prompt(hotwords, language=None, itn=True):
-                        return apply_nano_context(orig(hotwords if hotwords else [], language, itn), ctx)
-                    model.get_prompt = get_prompt
-                try:
-                    raw = self.nano.generate(input=x, language="中文", itn=True, **kw)
-                finally:
-                    if orig:
-                        model.get_prompt = orig
+                raw = self._nano_generate_with_oom_fallback(x, kw, ctx)
             raw = raw[0] if raw else {}
             ctc = raw.get("ctc_text") or ""
             if not str(ctc).strip():
@@ -747,6 +1182,9 @@ class Engine:
 
         # 热词听着不像（或原始输出泄露了提示括号）时先去掉热词再认一次（仍可带上一句）；复读则再去掉上一句和热词
         first = once(True, True, limit)
+        hotword_rejected = False
+        loop_fallback = False
+        ctc_present: list[str] = []
         if hws:
             txt0 = first.get("text") or ""
             ctc0 = first.get("ctc_text") or ""
@@ -755,6 +1193,7 @@ class Engine:
             leak = bool(PROMPT_LEAK_RE.search(raw0))
             bad = [w for w in present if not _sounds_like(w, ctc0)]
             if leak or bad:
+                hotword_rejected = True
                 try:
                     import rsi_vocab
                     rej = bad or [w for w in hws if w.lower() in raw0.lower()]
@@ -765,6 +1204,7 @@ class Engine:
                 log.info("hotword not credible, re-decode without: %r (ctc %r)", raw0 or txt0, ctc0)
                 first = once(False, True, limit)
             elif present:
+                ctc_present = present
                 try:
                     import rsi_vocab
                     rsi_vocab.record_ctc_result(present, [])
@@ -776,7 +1216,23 @@ class Engine:
             if chosen == (second.get("text") or "") and chosen != (first.get("text") or ""):
                 log.info("repetition guard kept re-decode: %r -> %r", first.get("text"), second.get("text"))
                 first = second
-        return {"text": first.get("text") or "", "timestamps": first.get("timestamps") or []}
+                loop_fallback = True
+        out = {"text": first.get("text") or "", "timestamps": first.get("timestamps") or []}
+        if (
+            cache is not None
+            and cache_key is not None
+            and out["text"].strip()
+            and not hotword_rejected
+            and not loop_fallback
+        ):
+            try:
+                entry = dict(out)
+                if ctc_present:
+                    entry["ctc_present"] = ctc_present
+                cache.put(cache_key, entry)
+            except Exception:  # noqa: BLE001
+                log.debug("ASR segment cache store failed", exc_info=True)
+        return out
 
     def asr_segment(self, audio: np.ndarray, hotword: str = "", punc: bool = True, context: str = "") -> str:
         """识别一小段 16k float32 音频（几百毫秒到几十秒）。
@@ -784,6 +1240,7 @@ class Engine:
         context 是上一句文字。Fun-ASR-Nano 能放进提示；Paraformer 没有这个入口，忽略。
         Nano 超过大约 10 秒会先切开再认，避免远场整段解码复读。
         """
+        self._touch()
         if len(audio) < SR * 0.2:
             return ""
         if self.ensure(asr_mode()) == "nano":
@@ -796,6 +1253,7 @@ class Engine:
                     texts.append(text)
                     ctx = safe_context(text)
             self.trim()
+            self._touch()
             return "".join(texts)
         capped = " ".join(hotword_list(hotword))
         kw = {"hotword": capped} if capped else {}
@@ -804,68 +1262,140 @@ class Engine:
         text = (r[0].get("text") or "").strip() if r else ""
         text = self.repunc(text) if (text and punc) else text
         self.trim()
+        self._touch()
         return repetition.collapse_repetition(text)
 
     # ---------- 会后整段转写 ----------
-    def transcribe(self, wav: Path, num_spk: int = 0, hotword: str = "", vad_kw: dict | None = None) -> list[dict]:
+    def transcribe(
+        self,
+        wav: Path,
+        num_spk: int = 0,
+        hotword: str = "",
+        vad_kw: dict | None = None,
+        checkpoint_dir: Path | None = None,
+    ) -> list[dict]:
         """vad_kw：切分语音用的 VAD 参数。全天模式的录音传和采集时相同的灵敏度，
         否则采集时录下的小声发言，到这里又被当成静音丢掉。
         双声道（麦克风 | 电脑声音）两路分开转写再按时间合并，抢话时两路都留。"""
+        self._touch()
+        wav_p = Path(wav)
         self.last_info = {}
         self.last_spk_embs = None
+        audio_health: dict | None = None
+        if wav_p.exists():
+            try:
+                h = audio_utils.detect_audio_health(wav_p)
+                audio_health = {
+                    "ok": bool(h["ok"]),
+                    "warnings": list(h["warnings"]),
+                    "dead_channels": list(h["dead_channels"]),
+                    "max_silent_s": float(h["max_silent_s"]),
+                }
+                if not audio_health["ok"]:
+                    log.warning("Audio health warning for %s: %s", wav_p.name, "; ".join(audio_health["warnings"]))
+            except Exception:  # noqa: BLE001
+                log.debug("detect_audio_health skipped for %s", wav_p, exc_info=True)
+        if audio_health is not None:
+            self.last_info["audio_health"] = audio_health
+
         try:
-            nch = sf.info(str(wav)).channels
+            nch = sf.info(str(wav_p)).channels
         except Exception:  # noqa: BLE001
             nch = 1
         if nch and nch >= 2:
-            x, sr = sf.read(str(wav), dtype="float32", always_2d=True)
-            return self._transcribe_stereo(x, int(sr), hotword, vad_kw)
-        cloud_failed = ""
-        if asr_mode() == "doubao":
-            try:
-                paras = self._cloud_transcribe(wav, num_spk, hotword, vad_kw)
-                if paras is not None:
+            x, sr = sf.read(str(wav_p), dtype="float32", always_2d=True)
+            paras = self._transcribe_stereo(x, int(sr), hotword, vad_kw)
+            if audio_health is not None:
+                self.last_info["audio_health"] = audio_health
+            self._touch()
+            return paras
+
+        clock = runtime_telemetry.JobClock()
+        try:
+            cloud_failed = ""
+            if asr_mode() == "doubao":
+                try:
+                    paras = self._cloud_transcribe(
+                        wav_p, num_spk, hotword, vad_kw, checkpoint_dir=checkpoint_dir, _clock=clock,
+                    )
+                    if paras is not None:
+                        if audio_health is not None:
+                            self.last_info["audio_health"] = audio_health
+                        self.trim(force=True)
+                        return paras
+                    cloud_failed = self.last_info.get("error") or "大部分片段识别失败"
+                except Exception as e:  # noqa: BLE001
+                    log.exception("doubao transcribe failed, falling back to local")
+                    cloud_failed = f"{type(e).__name__}: {e}"[:200]
+
+            clock.begin("model_load_s")
+            mode = self.ensure(asr_mode())
+            clock.end("model_load_s")
+            mem_warn = self.last_info.get("memory_warning")
+            oom_fb = self.last_info.get("oom_fallback")
+            # 豆包整体失败改用本机时记下原因，网页上显示“豆包云端失败，已改用本机识别”
+            self.last_info = {"engine": mode, **({"cloud_failed": cloud_failed} if cloud_failed else {})}
+            if mem_warn:
+                self.last_info["memory_warning"] = mem_warn
+            if oom_fb:
+                self.last_info["oom_fallback"] = oom_fb
+            if audio_health is not None:
+                self.last_info["audio_health"] = audio_health
+            if asr_mode() == "nano" and mode != "nano" and self.nano_error:
+                self.last_info["nano_failed"] = self.nano_error
+            if mode == "nano":
+                # 说话人：按 1.5s 小块的声纹聚类；文字：Nano 识别。不再跑 Paraformer 整段识别
+                try:
+                    clauses = self._nano_transcribe(
+                        wav_p, num_spk, hotword, vad_kw, checkpoint_dir=checkpoint_dir, _clock=clock,
+                    )
+                    clock.begin("postprocess_s")
+                    paras = self._paragraphs(clauses)
+                    clock.end("postprocess_s")
+                    _cleanup_checkpoints(checkpoint_dir)
                     self.trim(force=True)
                     return paras
-                cloud_failed = self.last_info.get("error") or "大部分片段识别失败"
-            except Exception as e:  # noqa: BLE001
-                log.exception("doubao transcribe failed, falling back to local")
-                cloud_failed = f"{type(e).__name__}: {e}"[:200]
-        mode = self.ensure(asr_mode())
-        # 豆包整体失败改用本机时记下原因，网页上显示“豆包云端失败，已改用本机识别”
-        self.last_info = {"engine": mode, **({"cloud_failed": cloud_failed} if cloud_failed else {})}
-        if asr_mode() == "nano" and mode != "nano" and self.nano_error:
-            self.last_info["nano_failed"] = self.nano_error
-        if mode == "nano":
-            # 说话人：按 1.5s 小块的声纹聚类；文字：Nano 识别。不再跑 Paraformer 整段识别
-            try:
-                paras = self._paragraphs(self._nano_transcribe(wav, num_spk, hotword, vad_kw))
-                self.trim(force=True)
-                return paras
-            except Exception as e:  # noqa: BLE001
-                log.exception("nano transcribe failed, falling back to paraformer")
-                self.last_info["engine"] = "paraformer"
-                self.last_info["nano_failed"] = f"{type(e).__name__}: {e}"[:200]
-        kw = {"batch_size_s": 300}
-        if num_spk and num_spk > 0:
-            kw["preset_spk_num"] = int(num_spk)
-        capped = " ".join(hotword_list(hotword))
-        if capped:
-            kw["hotword"] = capped
-        inp: str | np.ndarray = str(wav)
-        if LEVEL_USE != "off":  # Paraformer 管线自带 VAD，分不开：音量归一后整段送进去（相当于 "all"）
-            xw, _ = sf.read(str(wav), dtype="float32")
-            inp = level(xw[:, 0] if xw.ndim > 1 else xw)
-        with self.full_lock:
-            res = self.full.generate(input=inp, **kw)[0]
-            sents = res.get("sentence_info") or []
-            if not sents and res.get("text"):
-                sents = [{"spk": 0, "start": 0, "end": int(duration_of(wav) * 1000), "text": res["text"]}]
-            paras = self._paragraphs(sents)
-            for p in paras:
-                p["text"] = repetition.collapse_repetition(self.repunc(p["text"]))
-        self.trim(force=True)
-        return paras
+                except Exception as e:  # noqa: BLE001
+                    log.exception("nano transcribe failed, falling back to paraformer")
+                    self.last_info["engine"] = "paraformer"
+                    self.last_info["nano_failed"] = f"{type(e).__name__}: {e}"[:200]
+
+            clock.begin("model_load_s")
+            self._ensure_full()
+            clock.end("model_load_s")
+
+            kw = {"batch_size_s": 300}
+            if num_spk and num_spk > 0:
+                kw["preset_spk_num"] = int(num_spk)
+            capped = " ".join(hotword_list(hotword))
+            if capped:
+                kw["hotword"] = capped
+            inp: str | np.ndarray = str(wav_p)
+            if LEVEL_USE != "off":  # Paraformer 管线自带 VAD，分不开：音量归一后整段送进去（相当于 "all"）
+                xw, _ = sf.read(str(wav_p), dtype="float32")
+                inp = level(xw[:, 0] if xw.ndim > 1 else xw)
+            clock.begin("asr_s")
+            with self.full_lock:
+                res = self.full.generate(input=inp, **kw)[0]
+            clock.end("asr_s")
+            clock.begin("postprocess_s")
+            with self.full_lock:
+                sents = res.get("sentence_info") or []
+                if not sents and res.get("text"):
+                    sents = [{"spk": 0, "start": 0, "end": int(duration_of(wav_p) * 1000), "text": res["text"]}]
+                paras = self._paragraphs(sents)
+                for p in paras:
+                    p["text"] = repetition.collapse_repetition(self.repunc(p["text"]))
+            clock.end("postprocess_s")
+            _cleanup_checkpoints(checkpoint_dir)
+            self.trim(force=True)
+            return paras
+        finally:
+            timings = clock.finish()
+            self.last_timings = timings
+            if isinstance(self.last_info, dict):
+                self.last_info["timings"] = timings
+            self._touch()
 
     def _transcribe_stereo(self, x: np.ndarray, sr: int, hotword: str, vad_kw: dict | None) -> list[dict]:
         """两路各自走原来的单声道流程（人数自动判断），再去掉串音、错开说话人编号。"""
@@ -915,11 +1445,28 @@ class Engine:
             val = next((p.get(k) for p in per if p and p.get(k)), "")
             if val:
                 info[k] = val
+        agg_timings: dict[str, float] = {}
+        for p in per:
+            t_map = p.get("timings") if isinstance(p, dict) else None
+            if isinstance(t_map, dict):
+                for tk, tv in t_map.items():
+                    agg_timings[tk] = round(agg_timings.get(tk, 0.0) + float(tv or 0.0), 6)
+        if agg_timings:
+            info["timings"] = agg_timings
+            self.last_timings = agg_timings
         self.last_info = info
         self.last_spk_embs = {"version": 1, "diarizer": emb_diar or "campp", "dim": emb_dim, "speakers": merged_embs} if merged_embs else None
         return kept
 
-    def _cloud_transcribe(self, wav: Path, num_spk: int, hotword: str, vad_kw: dict | None = None) -> list[dict] | None:
+    def _cloud_transcribe(
+        self,
+        wav: Path,
+        num_spk: int,
+        hotword: str,
+        vad_kw: dict | None = None,
+        checkpoint_dir: Path | None = None,
+        _clock: runtime_telemetry.JobClock | None = None,
+    ) -> list[dict] | None:
         """豆包云端识别文字，本机做 VAD + 说话人分离。
         豆包只给整段文字、没有逐字时间，所以先按说话人把语音切成单元（见 _speaker_units），
         每个单元整段识别，说话人直接取单元的。云端失败/没出字的单元用本机模型补。
@@ -928,12 +1475,36 @@ class Engine:
         x, sr = sf.read(str(wav), dtype="float32")
         if x.ndim > 1:
             x = x[:, 0]
+        x = audio_utils.validate_audio_array(x, int(sr or SR))
         x, xv = level_pair(x)
-        segs = self._offline_segs(xv, vad_kw)
+        if _clock is not None:
+            _clock.begin("vad_s")
+        segs = self._offline_segs(xv, vad_kw, local_only=getattr(self, "local_only", None))
+        if _clock is not None:
+            _clock.end("vad_s")
         if not segs:
             self.last_info = {"engine": "doubao", "units": 0}
+            _cleanup_checkpoints(checkpoint_dir)
             return []
-        turns = self._diarize(x, segs, num_spk, wav=wav)
+
+        ckpt_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
+        wav_hash = audio_utils.audio_sha256(wav) if ckpt_dir is not None else ""
+        diar_cfg = diarizer_mode()
+        turns_ckpt = _load_turns_checkpoint(ckpt_dir, wav_hash, diar_cfg, num_spk) if ckpt_dir is not None else None
+        if turns_ckpt is not None:
+            turns = [(int(a), int(b), int(s)) for a, b, s in turns_ckpt["turns"]]
+            if turns_ckpt.get("diarizer_used"):
+                self.last_info["diarizer"] = turns_ckpt["diarizer_used"]
+            if turns_ckpt.get("last_spk_embs") is not None:
+                self.last_spk_embs = turns_ckpt["last_spk_embs"]
+        else:
+            turns = self._diarize(x, segs, num_spk, wav=wav, clock=_clock)
+            if ckpt_dir is not None:
+                _save_turns_checkpoint(
+                    ckpt_dir, wav_hash, diar_cfg, num_spk,
+                    self.last_info.get("diarizer", diar_cfg), turns, self.last_spk_embs,
+                )
+
         units = self._speaker_units(segs, turns)
         total_ms = len(x) * 1000 // SR
         clips = []
@@ -941,33 +1512,67 @@ class Engine:
             s = max(s - 200, units[i - 1][1] if i else 0, 0)
             e = min(e + 200, units[i + 1][0] if i + 1 < len(units) else total_ms)
             clips.append(x[int(s * SR / 1000):int(e * SR / 1000)])
+
+        resumed_units = _load_units_checkpoint(ckpt_dir, wav_hash, "doubao", hotword) if ckpt_dir is not None else {}
+        pending_indices = [i for i in range(len(units)) if i not in resumed_units]
+
+        if _clock is not None:
+            _clock.begin("asr_s")
         t = time.time()
-        # 豆包把很小声的段当成没人说话（实测没出字的段音量中位数 -34dB，出字的 -28dB）；
-        # 小声的段先放大到 -22dB 再发，能多认出约四成。本机补的时候仍用原始音频
-        res = doubao_asr.recognize_many([_boost(c) for c in clips], concurrency=16)  # 实测 16 路无报错，比 8 路快近一倍
-        errs = [r for r in res if isinstance(r, Exception)]
-        log.info("doubao: %d units in %.1fs, %d failed%s", len(res), time.time() - t, len(errs),
+        pending_clips = [_boost(clips[i]) for i in pending_indices]
+        pending_res = doubao_asr.recognize_many(pending_clips, concurrency=16) if pending_clips else []
+        res_by_idx: dict[int, object] = {}
+        for idx, r in zip(pending_indices, pending_res):
+            res_by_idx[idx] = r
+        errs = [r for r in pending_res if isinstance(r, Exception)]
+        log.info("doubao: %d units in %.1fs, %d failed%s", len(units), time.time() - t, len(errs),
                  f" ({errs[0]!r})" if errs else "")
-        if len(errs) > max(2, len(res) // 2):
-            self.last_info = {"error": f"{len(errs)}/{len(res)} 段失败：{errs[0]}"[:200]}
+        if len(errs) > max(2, len(pending_indices) // 2) and pending_indices:
+            if _clock is not None:
+                _clock.end("asr_s")
+            self.last_info = {"error": f"{len(errs)}/{len(pending_indices)} 段失败：{errs[0]}"[:200]}
             return None
+
         import context_hotwords
         correct = context_hotwords.make_lexicon_corrector(hotword)
         sents, n_local = [], 0
-        for (s, e, spk), clip, r in zip(units, clips, res):
-            text = "" if isinstance(r, Exception) else r["text"]
-            if not text.strip() and len(clip) >= SR * 1.5:  # 云端失败/没出字：本机补（本机模型接受热词）
-                text = self.asr_segment(clip, hotword)
-                n_local += bool(text)
-            elif text.strip():
-                # 豆包这个接口不接受热词，改在转写后按词库和上下文纠错
-                text = correct(text)
-            text = repetition.collapse_repetition(SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip())))
+        for idx, ((s, e, spk), clip) in enumerate(zip(units, clips)):
+            if idx in resumed_units:
+                text = str(resumed_units[idx].get("text") or "")
+            else:
+                r = res_by_idx[idx]
+                text = "" if isinstance(r, Exception) else r["text"]
+                if not text.strip() and len(clip) >= SR * 1.5:  # 云端失败/没出字：本机补（本机模型接受热词）
+                    text = self.asr_segment(clip, hotword)
+                    n_local += bool(text)
+                elif text.strip():
+                    # 豆包这个接口不接受热词，改在转写后按词库和上下文纠错
+                    text = correct(text)
+                text = repetition.collapse_repetition(SPELLED_RE.sub(r"\1", CJK_SPACE_RE.sub("", text.strip())))
+                if ckpt_dir is not None:
+                    _append_unit_checkpoint(ckpt_dir, {
+                        "wav_hash": wav_hash,
+                        "asr_mode": "doubao",
+                        "hotword": hotword or "",
+                        "idx": idx,
+                        "start": int(s),
+                        "end": int(e),
+                        "spk": int(spk),
+                        "text": text,
+                    })
             if text:
                 sents.append({"spk": spk, "start": s, "end": e, "text": text})
+        if _clock is not None:
+            _clock.end("asr_s")
+        if _clock is not None:
+            _clock.begin("postprocess_s")
+        paras = self._paragraphs(sents)
+        if _clock is not None:
+            _clock.end("postprocess_s")
+        _cleanup_checkpoints(ckpt_dir)
         self.last_info = {**{k: v for k, v in self.last_info.items() if k.startswith("diarizer")},
                           "engine": "doubao", "units": len(units), "failed": len(errs), "local": n_local}
-        return self._paragraphs(sents)
+        return paras
 
     @staticmethod
     def _speaker_units(segs: list, turns: list[tuple], min_turn: int = 2000, gap: int = 3000,
@@ -1060,41 +1665,88 @@ class Engine:
                     units.append(cur)
         return units
 
-    def _diarize_pyannote(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
-        fd, name = tempfile.mkstemp(suffix=".json", prefix="diar-")
-        os.close(fd)
-        out = Path(name)
-        try:
-            p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_worker.py")), str(wav), str(out),
-                                str(int(num_spk or 0))], capture_output=True, text=True,
-                               timeout=max(900, duration_of(wav) * 1.5), **_NO_WIN)
-            if p.returncode != 0:
-                raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
-            r = json.loads(out.read_text())
-        finally:
-            out.unlink(missing_ok=True)
-        log.info("pyannote diarization on %s: load %.1fs, run %.1fs, %d turns", r.get("device"), r.get("load_s", 0),
-                 r.get("run_s", 0), len(r["turns"]))
+    def _record_diarizer_timings(self, load_s: float, run_s: float) -> None:
+        self._last_diarizer_timings = (float(load_s), float(run_s))
+        prev = getattr(self, "last_timings", None)
+        timings = dict(prev) if isinstance(prev, dict) else {}
+        timings["diarize_load_s"] = round(float(load_s), 6)
+        timings["diarize_run_s"] = round(float(run_s), 6)
+        self.last_timings = timings
+
+    def _diarize_worker_or_oneshot(
+        self, kind: str, script: str, prefix: str, timeout: float, wav: Path, num_spk: int,
+    ) -> list[tuple[int, int, int]]:
+        pool_patched = (
+            worker_pool.default_pool is not _ORIG_DEFAULT_POOL
+            or worker_pool.WorkerPool.run_diarizer is not _ORIG_RUN_DIARIZER
+            or worker_pool.PersistentJsonlWorker.run is not _ORIG_WORKER_RUN
+        )
+        subproc_patched = subprocess.run is not _ORIG_SUBPROCESS_RUN
+        use_pool = os.environ.get("MEETING_DIARIZE_POOL", "1") != "0" and (pool_patched or not subproc_patched)
+        r: dict | None = None
+        load_s = 0.0
+        run_s = 0.0
+        if use_pool:
+            try:
+                t0 = time.perf_counter()
+                pool = worker_pool.default_pool()
+                was_alive = False
+                try:
+                    was_alive = bool(pool.get(kind).is_alive())
+                except Exception:  # noqa: BLE001
+                    was_alive = False
+                r = pool.run_diarizer(kind, str(wav), num_spk=int(num_spk or 0), timeout=timeout)
+                wall_s = max(0.0, time.perf_counter() - t0)
+                run_s = float(r.get("run_s") or 0.0)
+                load_s = float(r.get("load_s") or 0.0)
+                if not was_alive and load_s == 0.0 and wall_s > run_s:
+                    load_s = round(max(0.0, wall_s - run_s), 3)
+                if run_s == 0.0 and wall_s > 0.0:
+                    run_s = round(max(0.0, wall_s - load_s), 3)
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s worker pool failed (%s), falling back to one-shot subprocess", kind, e)
+                r = None
+        if r is None:
+            fd, name = tempfile.mkstemp(suffix=".json", prefix=prefix)
+            os.close(fd)
+            out = Path(name)
+            try:
+                p = subprocess.run(
+                    [sys.executable, str(Path(__file__).with_name(script)), str(wav), str(out), str(int(num_spk or 0))],
+                    capture_output=True, text=True, timeout=timeout, **_NO_WIN,
+                )
+                if p.returncode != 0:
+                    raise RuntimeError(
+                        (p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}"
+                    )
+                r = json.loads(out.read_text())
+            finally:
+                out.unlink(missing_ok=True)
+            load_s = float(r.get("load_s") or 0.0)
+            run_s = float(r.get("run_s") or 0.0)
+        self._record_diarizer_timings(load_s, run_s)
+        log.info("%s diarization on %s: load %.1fs, run %.1fs, %d turns",
+                 kind, r.get("device"), load_s, run_s, len(r["turns"]))
         return [(int(a), int(b), int(s)) for a, b, s in r["turns"]]
+
+    def _diarize_pyannote(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
+        return self._diarize_worker_or_oneshot(
+            "pyannote", "diarize_worker.py", "diar-", max(900, duration_of(wav) * 1.5), wav, num_spk,
+        )
 
     def _diarize_nemotron(self, wav: Path, num_spk: int = 0) -> list[tuple[int, int, int]]:
-        fd, name = tempfile.mkstemp(suffix=".json", prefix="diar-nemo-")
-        os.close(fd)
-        out = Path(name)
-        try:
-            p = subprocess.run([sys.executable, str(Path(__file__).with_name("diarize_nemotron.py")), str(wav), str(out),
-                                str(int(num_spk or 0))], capture_output=True, text=True,
-                               timeout=max(900, duration_of(wav) * 2), **_NO_WIN)
-            if p.returncode != 0:
-                raise RuntimeError((p.stderr or "").strip().splitlines()[-1][:300] if p.stderr.strip() else f"exit {p.returncode}")
-            r = json.loads(out.read_text())
-        finally:
-            out.unlink(missing_ok=True)
-        log.info("nemotron diarization on %s: load %.1fs, run %.1fs, %d turns", r.get("device"), r.get("load_s", 0),
-                 r.get("run_s", 0), len(r["turns"]))
-        return [(int(a), int(b), int(s)) for a, b, s in r["turns"]]
+        return self._diarize_worker_or_oneshot(
+            "nemotron", "diarize_nemotron.py", "diar-nemo-", max(900, duration_of(wav) * 2), wav, num_spk,
+        )
 
-    def _diarize(self, x: np.ndarray, segs: list, num_spk: int = 0, wav: Path | None = None) -> list[tuple[int, int, int]]:
+    def _diarize(
+        self,
+        x: np.ndarray,
+        segs: list,
+        num_spk: int = 0,
+        wav: Path | None = None,
+        clock: runtime_telemetry.JobClock | None = None,
+    ) -> list[tuple[int, int, int]]:
         """说话人分离 → [(开始ms, 结束ms, 说话人)]，每个时刻一个人。
         diarizer_mode() 是 "pyannote" 且给了 wav：子进程跑 pyannote（用原始录音，不受 LEVEL_USE 影响），
         再用 CAM++ 声纹合并太像的说话人；出错就退回下面的 CAM++。
@@ -1105,7 +1757,16 @@ class Engine:
         self.last_spk_embs = None
         if diarizer_mode() == "nemotron" and wav is not None:
             try:
+                self._last_diarizer_timings = None
+                t_d0 = time.perf_counter()
                 turns = self._diarize_nemotron(wav, num_spk)
+                if clock is not None:
+                    dt = getattr(self, "_last_diarizer_timings", None)
+                    if isinstance(dt, tuple) and len(dt) == 2:
+                        clock.add_external("diarize_load_s", dt[0])
+                        clock.add_external("diarize_run_s", dt[1])
+                    else:
+                        clock.add_external("diarize_run_s", time.perf_counter() - t_d0)
                 self.last_info["diarizer"] = "nemotron"
                 return turns
             except Exception as e:  # noqa: BLE001
@@ -1113,59 +1774,124 @@ class Engine:
                 self.last_info["diarizer_failed"] = f"{type(e).__name__}: {e}"[:200]
         if diarizer_mode() == "pyannote" and wav is not None:
             try:
+                self._last_diarizer_timings = None
+                t_d0 = time.perf_counter()
                 turns = self._diarize_pyannote(wav, num_spk)
+                if clock is not None:
+                    dt = getattr(self, "_last_diarizer_timings", None)
+                    if isinstance(dt, tuple) and len(dt) == 2:
+                        clock.add_external("diarize_load_s", dt[0])
+                        clock.add_external("diarize_run_s", dt[1])
+                    else:
+                        clock.add_external("diarize_run_s", time.perf_counter() - t_d0)
                 if not (num_spk and num_spk > 0):  # 指定了人数就照 pyannote 的，不再合并
-                    chunks, X = self._spk_embeddings(x, segs)
-                    n0 = len({t[2] for t in turns})
-                    turns = merge_turn_speakers(turns, [[c[0], c[1]] for c in chunks], X, PYA_MERGE_THR)
-                    log.info("pyannote speakers %d -> %d after CAM++ merge", n0, len({t[2] for t in turns}))
+                    if clock is not None:
+                        clock.begin("diarize_run_s")
                     try:
-                        import voiceprints
-                        self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="pyannote")
-                    except Exception:  # noqa: BLE001
-                        log.debug("compute_meeting_embs failed", exc_info=True)
+                        chunks, X = self._spk_embeddings(x, segs)
+                        n0 = len({t[2] for t in turns})
+                        turns = merge_turn_speakers(turns, [[c[0], c[1]] for c in chunks], X, PYA_MERGE_THR)
+                        log.info("pyannote speakers %d -> %d after CAM++ merge", n0, len({t[2] for t in turns}))
+                        try:
+                            import voiceprints
+                            self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="pyannote")
+                        except Exception:  # noqa: BLE001
+                            log.debug("compute_meeting_embs failed", exc_info=True)
+                    finally:
+                        if clock is not None:
+                            clock.end("diarize_run_s")
                 self.last_info["diarizer"] = "pyannote"
                 return turns
             except Exception as e:  # noqa: BLE001
                 log.exception("pyannote diarization failed, falling back to CAM++")
                 self.last_info["diarizer_failed"] = f"{type(e).__name__}: {e}"[:200]
         self.last_info["diarizer"] = "campp"
-        chunks, X = self._spk_embeddings(x, segs)
-        if not chunks:
-            return []
-        if num_spk and num_spk > 0:  # 用户指定了人数：照旧交给 FunASR
-            labels = self.full.cb_model(X, oracle_num=int(num_spk))
-        else:
-            labels = cluster_speakers(X, self.full.cb_model, min_sec=min_cluster_sec(segs))
-        turns = [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
+        if clock is not None:
+            clock.begin("diarize_load_s")
         try:
-            import voiceprints
-            self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="campp")
-        except Exception:  # noqa: BLE001
-            log.debug("compute_meeting_embs failed", exc_info=True)
-        return turns
+            self._spk_backend()
+            cb = self._cb_backend()
+        finally:
+            if clock is not None:
+                clock.end("diarize_load_s")
+
+        if clock is not None:
+            clock.begin("diarize_run_s")
+        try:
+            chunks, X = self._spk_embeddings(x, segs)
+            if not chunks:
+                return []
+            if num_spk and num_spk > 0:  # 用户指定了人数：照旧交给 FunASR
+                labels = cb(X, oracle_num=int(num_spk))
+            else:
+                labels = cluster_speakers(X, cb, min_sec=min_cluster_sec(segs))
+            turns = [(int(a * 1000), int(b * 1000), int(s)) for a, b, s in _sv_postprocess(chunks, None, labels, X)]
+            try:
+                import voiceprints
+                self.last_spk_embs = voiceprints.compute_meeting_embs(turns, chunks, X, diarizer="campp")
+            except Exception:  # noqa: BLE001
+                log.debug("compute_meeting_embs failed", exc_info=True)
+            return turns
+        finally:
+            if clock is not None:
+                clock.end("diarize_run_s")
 
     def _spk_embeddings(self, x: np.ndarray, segs: list) -> tuple[list, np.ndarray]:
         """语音段切成 1.5s 小块（步长 0.75s），每块一个 CAM++ 声纹。返回 (小块 [开始秒, 结束秒, 音频], 声纹矩阵)。"""
         chunks = _sv_chunk([[s / 1000, e / 1000, x[int(s * SR / 1000):int(e * SR / 1000)]] for s, e in segs])
         if not chunks:
             return [], np.zeros((0, 192), dtype=np.float32)
+        runner, spk_model, spk_kwargs = self._spk_backend()
         embs = []
         for i in range(0, len(chunks), 128):  # 分批占 GPU，实时识别可以插队
             with self.full_lock:
-                res = self.full.inference([c[2] for c in chunks[i:i + 128]], input_len=None,
-                                          model=self.full.spk_model, kwargs=self.full.spk_kwargs)
+                if spk_model is not None or spk_kwargs is not None:
+                    res = runner.inference([c[2] for c in chunks[i:i + 128]], input_len=None,
+                                           model=spk_model, kwargs=spk_kwargs)
+                else:
+                    res = runner.inference([c[2] for c in chunks[i:i + 128]], input_len=None)
             embs.append(torch.cat([r["spk_embedding"] for r in res]).cpu())
         return chunks, torch.cat(embs).numpy()
 
-    def _nano_transcribe(self, wav: Path, num_spk: int, hotword: str, vad_kw: dict | None = None) -> list[dict]:
+    def _nano_transcribe(
+        self,
+        wav: Path,
+        num_spk: int,
+        hotword: str,
+        vad_kw: dict | None = None,
+        checkpoint_dir: Path | None = None,
+        _clock: runtime_telemetry.JobClock | None = None,
+    ) -> list[dict]:
         x, sr = sf.read(str(wav), dtype="float32")
         if x.ndim > 1:
             x = x[:, 0]
+        x = audio_utils.validate_audio_array(x, int(sr or SR))
         x, xv = level_pair(x)
         # 相邻语音并成最长 30 秒的大段，Nano 上下文越长越准（切成碎句明显变差）
-        segs = self._offline_segs(xv, vad_kw)
-        turns = self._diarize(x, segs, num_spk, wav=wav)
+        if _clock is not None:
+            _clock.begin("vad_s")
+        segs = self._offline_segs(xv, vad_kw, local_only=getattr(self, "local_only", None))
+        if _clock is not None:
+            _clock.end("vad_s")
+
+        ckpt_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
+        wav_hash = audio_utils.audio_sha256(wav) if ckpt_dir is not None else ""
+        diar_cfg = diarizer_mode()
+        turns_ckpt = _load_turns_checkpoint(ckpt_dir, wav_hash, diar_cfg, num_spk) if ckpt_dir is not None else None
+        if turns_ckpt is not None:
+            turns = [(int(a), int(b), int(s)) for a, b, s in turns_ckpt["turns"]]
+            if turns_ckpt.get("diarizer_used"):
+                self.last_info["diarizer"] = turns_ckpt["diarizer_used"]
+            if turns_ckpt.get("last_spk_embs") is not None:
+                self.last_spk_embs = turns_ckpt["last_spk_embs"]
+        else:
+            turns = self._diarize(x, segs, num_spk, wav=wav, clock=_clock)
+            if ckpt_dir is not None:
+                _save_turns_checkpoint(
+                    ckpt_dir, wav_hash, diar_cfg, num_spk,
+                    self.last_info.get("diarizer", diar_cfg), turns, self.last_spk_embs,
+                )
+
         # 停顿 ≤1.2s 的相邻段连同停顿一起识别：VAD 常在句中换气处切开，后半句没了上下文就认错
         # （实测“通过各个层面的数据去看”被切成两段后认成“你出货/团队的数据”）。
         # 停顿放宽到 2s 反而变差：夹进太多噪声，Nano 会丢标点、错字变多。
@@ -1175,20 +1901,48 @@ class Engine:
                 merged[-1][1] = e
             else:
                 merged.append([s, e])
+        resumed_units = _load_units_checkpoint(ckpt_dir, wav_hash, "nano", hotword) if ckpt_dir is not None else {}
         clauses = []
         total_ms = len(x) * 1000 // SR
-        for i, (s, e) in enumerate(merged):
-            # 前后各留 0.2s（不越过相邻段）：VAD 边界很紧，不留白句尾一两个字常被截掉（“再批”→“再。”）
-            s = max(s - 200, merged[i - 1][1] if i else 0, 0)
-            e = min(e + 200, merged[i + 1][0] if i + 1 < len(merged) else total_ms)
-            a = x[int(s * SR / 1000):int(e * SR / 1000)]
-            if len(a) < SR * 0.2:
-                continue
-            r = self._nano(a, hotword)  # 每段单独加锁，期间实时识别可以插队
-            if r["text"]:
-                clauses += self._clauses(r["text"], r["timestamps"], s, e)
-            self.trim()
-        return self._assign_speakers(clauses, turns)
+        if _clock is not None:
+            _clock.begin("asr_s")
+        try:
+            for i, (s, e) in enumerate(merged):
+                # 前后各留 0.2s（不越过相邻段）：VAD 边界很紧，不留白句尾一两个字常被截掉（“再批”→“再。”）
+                s = max(s - 200, merged[i - 1][1] if i else 0, 0)
+                e = min(e + 200, merged[i + 1][0] if i + 1 < len(merged) else total_ms)
+                a = x[int(s * SR / 1000):int(e * SR / 1000)]
+                if len(a) < SR * 0.2:
+                    continue
+                resumed = resumed_units.get(i)
+                if resumed is not None and int(resumed.get("start", -1)) == int(s) and int(resumed.get("end", -1)) == int(e):
+                    r = {"text": str(resumed.get("text") or ""), "timestamps": list(resumed.get("timestamps") or [])}
+                else:
+                    r = self._nano(a, hotword)  # 每段单独加锁，期间实时识别可以插队
+                    if ckpt_dir is not None:
+                        _append_unit_checkpoint(ckpt_dir, {
+                            "wav_hash": wav_hash,
+                            "asr_mode": "nano",
+                            "hotword": hotword or "",
+                            "idx": i,
+                            "start": int(s),
+                            "end": int(e),
+                            "text": r["text"],
+                            "timestamps": r["timestamps"],
+                        })
+                if r["text"]:
+                    clauses += self._clauses(r["text"], r["timestamps"], s, e)
+                self.trim()
+        finally:
+            if _clock is not None:
+                _clock.end("asr_s")
+        if _clock is not None:
+            _clock.begin("postprocess_s")
+        assigned = self._assign_speakers(clauses, turns)
+        if _clock is not None:
+            _clock.end("postprocess_s")
+        _cleanup_checkpoints(ckpt_dir)
+        return assigned
 
     @classmethod
     def _assign_speakers(cls, clauses: list[dict], turns: list[tuple], min_ms: float | None = None) -> list[dict]:

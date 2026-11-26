@@ -83,6 +83,27 @@ def test_for_meeting_string():
         vocab.save(prev)
 
 
+def test_noise_word_filtering_preserves_acronyms_and_explicit_user_words():
+    hw._PN_CACHE.clear()
+    noisy_text = (
+        "OK 好的，今天下午普通员工聊聊这个东西，宝贵的英语和中文资料，第一版入口关联维度太多，多少钱呢？"
+        "Also check it to in on the and yes no, but keep ASIN, ERP, AI, IT, US, MCP, Codex 和「观远数据」。"
+    )
+    nouns = hw.proper_nouns(noisy_text)
+    for bad in ("OK", "今天下午", "普通员工", "东西", "宝贵", "英语", "中文", "第一版", "入口", "关联", "维度", "太多", "多少钱",
+                "Also", "it", "to", "in", "on", "the", "and", "yes", "no", "but", "keep"):
+        check(bad not in nouns and bad.lower() not in {x.lower() for x in nouns if x != "IT" and x != "US"},
+              f"非专名噪声词不应被自动抽取：{bad} -> {nouns}")
+    for good in ("ASIN", "ERP", "AI", "IT", "US", "MCP", "Codex", "观远数据"):
+        check(good in nouns, f"真实专名与缩写应保留：{good} -> {nouns}")
+
+    # 短标题若是噪声词（如「第一版」「多少钱」）不进自动热词；但用户显式填写的热词仍保留
+    from_title = hw.merge_hotwords([], title="第一版", title_auto=False, gallery_names=[])
+    check("第一版" not in from_title, f"噪声短标题不应进自动热词：{from_title}")
+    explicit = hw.merge_hotwords(["OK", "东西"], gallery_names=[])
+    check(explicit == ["OK", "东西"], f"用户显式热词不受自动噪声过滤影响：{explicit}")
+
+
 if __name__ == "__main__":
     _STANDALONE = True
     fails = 0
@@ -91,6 +112,7 @@ if __name__ == "__main__":
     test_history_needs_repeat()
     test_fallback_correction()
     test_for_meeting_string()
+    test_noise_word_filtering_preserves_acronyms_and_explicit_user_words()
     if fails:
         print(f"{fails} 项失败")
         sys.exit(1)

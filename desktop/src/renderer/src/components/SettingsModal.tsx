@@ -3,10 +3,12 @@ import type {
   AmbientConfig,
   AmbientStorage,
   AsrConfig,
+  HostMemoryStatus,
   LanStatus,
   LlmProvider,
   LocalLlmStatus,
   McpConfigResponse,
+  ModelStatusResponse,
   RsiState,
   VocabData,
 } from "@shared/types";
@@ -25,7 +27,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownView } from "@/components/MarkdownView";
 import { CopyButton, Disclosure, InlineConfirm, ModalShell } from "@/components/MotionPrimitives";
 import { api } from "@/lib/api";
@@ -81,6 +83,11 @@ function qrDataUri(svg: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(patched)}`;
 }
 
+function fmtGiB(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) return "--";
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 function detectPresetName(url: string): string {
   const lower = url.toLowerCase();
   if (lower.includes("deepseek.com")) return "DeepSeek";
@@ -116,6 +123,11 @@ export function SettingsModal() {
 
   // ASR state
   const [asr, setAsr] = useState<AsrConfig | null>(null);
+  const [hostMem, setHostMem] = useState<HostMemoryStatus | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatusResponse | null>(null);
+  const [newModelRoot, setNewModelRoot] = useState("");
+  const [unloadingAsr, setUnloadingAsr] = useState(false);
+  const [exportingDiag, setExportingDiag] = useState(false);
   const asrSeqRef = useRef(0);
   const asrQueueRef = useRef<Promise<void>>(Promise.resolve());
   const lastSavedAsrRef = useRef<AsrConfig | null>(null);
@@ -144,6 +156,34 @@ export function SettingsModal() {
   const [lanSaving, setLanSaving] = useState(false);
   const [mcp, setMcp] = useState<McpConfigResponse | null>(null);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [mcpExcludePrivate, setMcpExcludePrivate] = useState(true);
+
+  const mcpConfigJson = useMemo(() => {
+    if (!mcp) return "";
+    if (!mcpExcludePrivate) return JSON.stringify(mcp.config, null, 2);
+    const servers = mcp.config.mcpServers;
+    const entry = servers["meeting-notes"];
+    if (!entry) return JSON.stringify(mcp.config, null, 2);
+    const args = entry.args.includes("--exclude-private") ? entry.args : [...entry.args, "--exclude-private"];
+    return JSON.stringify(
+      {
+        ...mcp.config,
+        mcpServers: {
+          ...servers,
+          "meeting-notes": { ...entry, args },
+        },
+      },
+      null,
+      2,
+    );
+  }, [mcp, mcpExcludePrivate]);
+
+  const mcpInstallCmd = useMemo(() => {
+    const base = mcp?.install_cmd?.trim();
+    if (!base) return "";
+    if (!mcpExcludePrivate) return base;
+    return base.includes("--exclude-private") ? base : `${base} --exclude-private`;
+  }, [mcp, mcpExcludePrivate]);
 
   const loadSection = useCallback(
     async (t: SettingsTab) => {
@@ -158,9 +198,15 @@ export function SettingsModal() {
           setProviders(s.providers.map((p) => ({ ...p, api_key_input: "" })));
           if (loc) setLocalLlm(loc);
         } else if (target === "asr") {
-          const data = await api<AsrConfig>("/api/asr");
+          const [data, mData, stData] = await Promise.all([
+            api<AsrConfig>("/api/asr"),
+            api<ModelStatusResponse>("/api/models/status").catch(() => null),
+            api<{ memory?: HostMemoryStatus }>("/api/state").catch(() => null),
+          ]);
           lastSavedAsrRef.current = data;
           setAsr(data);
+          if (mData) setModelStatus(mData);
+          if (stData?.memory) setHostMem(stData.memory);
         } else if (target === "vocab") {
           const [vData, rData] = await Promise.all([api<VocabData>("/api/vocab"), api<RsiState>("/api/rsi")]);
           setVocab({ hotwords: vData.hotwords || "", fixes: vData.fixes || [] });
@@ -203,6 +249,18 @@ export function SettingsModal() {
     if (!open) return;
     void loadSection(tab);
   }, [open, tab, loadSection]);
+
+  const downloadRunning = modelStatus?.task?.status === "queued" || modelStatus?.task?.status === "running";
+
+  useEffect(() => {
+    if (!open || tab !== "asr" || !downloadRunning) return;
+    const timer = setInterval(() => {
+      void api<ModelStatusResponse>("/api/models/status")
+        .then((mData) => setModelStatus(mData))
+        .catch(() => undefined);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [open, tab, downloadRunning]);
 
   const saveLlmSettings = async () => {
     setLlmSaving(true);
@@ -339,6 +397,12 @@ export function SettingsModal() {
       }
       setPurgePreviewCount(null);
       await api("/api/ambient/config", { method: "PUT", body: ambCfg });
+      const [stg, rData] = await Promise.all([
+        api<AmbientStorage>("/api/ambient/storage").catch(() => null),
+        api<RsiState>("/api/rsi").catch(() => null),
+      ]);
+      if (stg) setStorage(stg);
+      if (rData) setRsi(rData);
       pushToast("全天模式设置已保存", { tone: "success" });
     } catch (err) {
       pushToast(err instanceof Error ? err.message : "保存失败", { tone: "error", durationMs: 5000 });
@@ -814,6 +878,289 @@ export function SettingsModal() {
                   <RefreshCw className="w-4 h-4" /> 重新加载识别模型
                 </button>
               </div>
+
+              <div className="space-y-4 pt-4 border-t border-[var(--line-2)]">
+                <div className="text-sm leading-[22px] font-semibold text-[var(--text)]">模型与系统维护</div>
+
+                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface-2)] p-3.5 flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[13px] leading-[20px] font-medium text-[var(--text)]">
+                      主机内存状态
+                    </div>
+                    <div className="text-xs leading-[18px] text-[var(--text-2)] num mt-0.5">
+                      {hostMem?.total_bytes != null
+                        ? `已用 ${fmtGiB(hostMem.used_bytes)} / ${fmtGiB(hostMem.total_bytes)}（可用 ${fmtGiB(hostMem.available_bytes)}）${hostMem.percent != null ? ` · ${hostMem.percent}%` : ""}`
+                        : "正在读取主机内存状态…"}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <InlineConfirm
+                      triggerLabel={unloadingAsr ? "释放中…" : "释放语音模型内存"}
+                      triggerClassName={BTN_SECONDARY_SM}
+                      disabled={unloadingAsr}
+                      danger={false}
+                      message="确定立即释放本地语音识别与分离模型占用的内存？下次转写时会自动重新加载。"
+                      confirmLabel="立即释放"
+                      onConfirm={async () => {
+                        setUnloadingAsr(true);
+                        try {
+                          const res = await api<{ unloaded?: string[]; memory?: HostMemoryStatus }>(
+                            "/api/asr/unload",
+                            { method: "POST", body: { target: "all" } },
+                          );
+                          if (res.memory) setHostMem(res.memory);
+                          void refreshHealth();
+                          const cnt = res.unloaded?.length || 0;
+                          pushToast(cnt > 0 ? `已释放 ${cnt} 项本地模型内存` : "当前无常驻语音模型可释放", {
+                            tone: "success",
+                          });
+                        } catch (err) {
+                          pushToast(err instanceof Error ? err.message : "释放模型内存失败", {
+                            tone: "error",
+                            durationMs: 4000,
+                          });
+                        } finally {
+                          setUnloadingAsr(false);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {modelStatus && (
+                  <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13px] leading-[20px] font-medium text-[var(--text)]">
+                        本地模型状态
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void api<ModelStatusResponse>("/api/models/status")
+                            .then((mData) => setModelStatus(mData))
+                            .catch(() => undefined);
+                        }}
+                        className="btn-ghost rounded-[8px] h-7 px-2 text-xs leading-[18px] text-[var(--text-2)] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" /> 刷新
+                      </button>
+                    </div>
+
+                    {modelStatus.task && (downloadRunning || modelStatus.task.status === "failed") && (
+                      <div
+                        className={`rounded-[8px] px-3 py-2 text-xs leading-[18px] ${
+                          modelStatus.task.status === "failed"
+                            ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                            : "bg-[var(--surface-2)] text-[var(--text-2)]"
+                        }`}
+                      >
+                        {downloadRunning ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate">
+                              正在下载 {modelStatus.task.model_id}
+                              {modelStatus.task.current_file ? ` · ${modelStatus.task.current_file}` : ""}
+                            </span>
+                            <span className="num shrink-0">
+                              {Math.round((modelStatus.task.progress || 0) * 100)}%
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="break-words">
+                            下载失败（{modelStatus.task.model_id}）：{modelStatus.task.error}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="divide-y divide-[var(--line-2)] border border-[var(--line-2)] rounded-[10px]">
+                      {modelStatus.models.map((m) => {
+                        const isThisDownloading = downloadRunning && modelStatus.task?.model_id === m.id;
+                        return (
+                          <div key={m.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[13px] leading-[20px] font-medium text-[var(--text)] truncate">
+                                  {m.label}
+                                </span>
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-[11px] leading-[16px] whitespace-nowrap shrink-0 ${
+                                    m.ready
+                                      ? "bg-[var(--ok-soft)] text-[var(--ok)]"
+                                      : "bg-[var(--fill)] text-[var(--muted)]"
+                                  }`}
+                                >
+                                  {m.ready ? "已就绪" : "未下载"}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="shrink-0">
+                              {isThisDownloading ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void api("/api/models/cancel", { method: "POST" })
+                                      .then(() => api<ModelStatusResponse>("/api/models/status"))
+                                      .then((mData) => {
+                                        setModelStatus(mData);
+                                        pushToast("已取消模型下载", { tone: "success" });
+                                      })
+                                      .catch((err) =>
+                                        pushToast(err instanceof Error ? err.message : "取消失败", {
+                                          tone: "error",
+                                        }),
+                                      );
+                                  }}
+                                  className={BTN_SECONDARY_SM}
+                                >
+                                  取消
+                                </button>
+                              ) : (
+                                !m.ready && (
+                                  <button
+                                    type="button"
+                                    disabled={downloadRunning}
+                                    onClick={() => {
+                                      void api("/api/models/download", {
+                                        method: "POST",
+                                        body: { model_id: m.id, source: "auto" },
+                                      })
+                                        .then(() => api<ModelStatusResponse>("/api/models/status"))
+                                        .then((mData) => {
+                                          setModelStatus(mData);
+                                          pushToast(`已开始下载 ${m.label}`, { tone: "success" });
+                                        })
+                                        .catch((err) =>
+                                          pushToast(err instanceof Error ? err.message : "启动下载失败", {
+                                            tone: "error",
+                                            durationMs: 4000,
+                                          }),
+                                        );
+                                    }}
+                                    className={BTN_SECONDARY_SM}
+                                  >
+                                    <Download className="w-3.5 h-3.5" /> 下载
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <div className="text-xs leading-[18px] text-[var(--text-2)]">
+                        自定义模型 / GGUF 目录
+                        {modelStatus.gguf.length > 0
+                          ? `（已发现 ${modelStatus.gguf.length} 个 GGUF 文件）`
+                          : ""}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={newModelRoot}
+                          onChange={(e) => setNewModelRoot(e.target.value)}
+                          placeholder="输入本地模型或 GGUF 目录路径"
+                          aria-label="自定义模型目录路径"
+                          className={`flex-1 ${FIELD_INPUT} font-mono text-xs`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const p = newModelRoot.trim();
+                            if (!p) return;
+                            void api("/api/models/roots", { method: "POST", body: { path: p } })
+                              .then(() => api<ModelStatusResponse>("/api/models/status"))
+                              .then((mData) => {
+                                setModelStatus(mData);
+                                setNewModelRoot("");
+                                pushToast("已添加自定义模型目录", { tone: "success" });
+                              })
+                              .catch((err) =>
+                                pushToast(err instanceof Error ? err.message : "添加目录失败", {
+                                  tone: "error",
+                                  durationMs: 4000,
+                                }),
+                              );
+                          }}
+                          className={`${BTN_SECONDARY_SM} shrink-0`}
+                        >
+                          <Plus className="w-3.5 h-3.5" /> 添加
+                        </button>
+                      </div>
+                      {modelStatus.roots.length > 0 && (
+                        <div className="divide-y divide-[var(--line-2)] border border-[var(--line-2)] rounded-[10px]">
+                          {modelStatus.roots.map((root) => (
+                            <div
+                              key={root}
+                              className="px-3 py-1.5 flex items-center justify-between gap-2 text-xs leading-[18px]"
+                            >
+                              <span className="font-mono text-[var(--text-2)] truncate">{root}</span>
+                              <button
+                                type="button"
+                                aria-label={`移除目录 ${root}`}
+                                onClick={() => {
+                                  void api("/api/models/roots", { method: "DELETE", body: { path: root } })
+                                    .then(() => api<ModelStatusResponse>("/api/models/status"))
+                                    .then((mData) => {
+                                      setModelStatus(mData);
+                                      pushToast("已移除自定义模型目录", { tone: "success" });
+                                    })
+                                    .catch((err) =>
+                                      pushToast(err instanceof Error ? err.message : "移除目录失败", {
+                                        tone: "error",
+                                      }),
+                                    );
+                                }}
+                                className="btn-ghost btn-danger rounded-[6px] w-7 h-7 flex items-center justify-center shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <span className="text-xs leading-[18px] text-[var(--muted)]">
+                    诊断包仅含脱敏后的运行状态与日志，不含会议录音、纪要或 API 密钥。
+                  </span>
+                  <button
+                    type="button"
+                    disabled={exportingDiag}
+                    onClick={() => {
+                      setExportingDiag(true);
+                      void fetch("/api/diagnostics/export")
+                        .then(async (res) => {
+                          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = "meeting-notes-support.zip";
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          URL.revokeObjectURL(url);
+                          pushToast("诊断包已导出", { tone: "success" });
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : "导出诊断包失败", {
+                            tone: "error",
+                            durationMs: 4000,
+                          }),
+                        )
+                        .finally(() => setExportingDiag(false));
+                    }}
+                    className={`${BTN_SECONDARY_MD} shrink-0`}
+                  >
+                    <Download className="w-4 h-4" /> {exportingDiag ? "导出中…" : "导出诊断包 (.zip)"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -967,9 +1314,20 @@ export function SettingsModal() {
                   </div>
 
                   <section className="space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-[15px] leading-[22px] font-semibold text-[var(--text)] num">
-                        已建立的声纹档案（{rsi.voiceprints?.persons?.length || 0} 人）
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-[15px] leading-[22px] font-semibold text-[var(--text)] num">
+                          已建立的声纹档案（{rsi.voiceprints?.persons?.length || 0} 人）
+                        </div>
+                        {typeof rsi.voiceprints?.tau_auto === "number" && (
+                          <span className="rounded-full bg-[var(--fill)] px-2.5 py-0.5 text-xs leading-[18px] text-[var(--text-2)] num">
+                            自动阈值 {rsi.voiceprints.tau_auto.toFixed(2)}
+                            {rsi.voiceprints.tau_auto > 0.68 &&
+                            typeof rsi.voiceprints.clean_auto_streak === "number"
+                              ? ` · 连续 ${rsi.voiceprints.clean_auto_streak}/${rsi.voiceprints.recovery_streak_target ?? 10} 场零撤回回落`
+                              : ""}
+                          </span>
+                        )}
                       </div>
                       <button
                         type="button"
@@ -1103,26 +1461,55 @@ export function SettingsModal() {
 
           {tab === "ambient" && ambCfg && (
             <div className="space-y-5 max-w-2xl">
-              {rsi?.ambient?.advice?.warning && (
-                <div className="rounded-[12px] bg-[var(--warn-soft)] text-[var(--warn)] p-3.5 flex flex-wrap items-center justify-between gap-3 text-[13px] leading-[20px]">
-                  <span>
-                    {rsi.ambient.advice.warning}
-                    {rsi.ambient.advice.reason ? `（${rsi.ambient.advice.reason}）` : ""}
-                  </span>
-                  {typeof rsi.ambient.advice.suggested_min_speech_s === "number" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const suggested = rsi.ambient?.advice?.suggested_min_speech_s;
-                        if (typeof suggested !== "number") return;
-                        setAmbCfg((cur) => (cur ? { ...cur, min_speech_s: suggested } : cur));
-                        pushToast(`已将最短保留时长设为 ${suggested} 秒，点击保存生效`);
-                      }}
-                      className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      采用建议
-                    </button>
-                  )}
+              {(rsi?.ambient?.advice?.warning ||
+                typeof rsi?.ambient?.advice?.suggested_min_speech_s === "number" ||
+                rsi?.ambient?.advice?.suggested_sensitivity ||
+                rsi?.ambient?.advice?.sensitivity_reason) && (
+                <div
+                  className={`rounded-[12px] p-3.5 flex flex-wrap items-center justify-between gap-3 text-[13px] leading-[20px] ${
+                    rsi?.ambient?.advice?.warning || rsi?.ambient?.advice?.suggested_sensitivity
+                      ? "bg-[var(--warn-soft)] text-[var(--warn)]"
+                      : "bg-[var(--surface-2)] text-[var(--text-2)]"
+                  }`}
+                >
+                  <div className="space-y-1 min-w-0 flex-1 num">
+                    {rsi?.ambient?.advice?.warning && <div>{rsi.ambient.advice.warning}</div>}
+                    {typeof rsi?.ambient?.advice?.suggested_min_speech_s === "number" &&
+                      rsi.ambient.advice.reason && <div>{rsi.ambient.advice.reason}</div>}
+                    {rsi?.ambient?.advice?.sensitivity_reason && (
+                      <div>{rsi.ambient.advice.sensitivity_reason}</div>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {typeof rsi?.ambient?.advice?.suggested_min_speech_s === "number" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const suggested = rsi.ambient?.advice?.suggested_min_speech_s;
+                          if (typeof suggested !== "number") return;
+                          setAmbCfg((cur) => (cur ? { ...cur, min_speech_s: suggested } : cur));
+                          pushToast(`已将最短保留时长设为 ${suggested} 秒，点击保存生效`);
+                        }}
+                        className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        采用时长建议
+                      </button>
+                    )}
+                    {rsi?.ambient?.advice?.suggested_sensitivity && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const suggested = rsi.ambient?.advice?.suggested_sensitivity;
+                          if (!suggested) return;
+                          setAmbCfg((cur) => (cur ? { ...cur, sensitivity: suggested } : cur));
+                          pushToast("已填入推荐收音灵敏度，点击保存生效");
+                        }}
+                        className="btn-secondary rounded-[8px] h-8 px-3 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        采用灵敏度建议
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1446,38 +1833,152 @@ export function SettingsModal() {
                     type="button"
                     onClick={() => setMcpOpen((v) => !v)}
                     aria-expanded={mcpOpen}
+                    aria-controls="mcp-skill-panel"
                     className="btn-ghost rounded-[8px] h-8 px-2.5 text-sm leading-[22px] font-medium text-[var(--text)] inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                   >
-                    <span>AI 桌面客户端接入 (MCP)</span>
+                    <span>AI 桌面客户端接入 (MCP & Skill)</span>
                     <ChevronDown
                       className={`w-4 h-4 transition-transform duration-200 ${mcpOpen ? "rotate-180" : ""}`}
                     />
                   </button>
 
-                  <Disclosure open={mcpOpen} contentClassName="space-y-3 pt-1">
+                  <Disclosure id="mcp-skill-panel" open={mcpOpen} contentClassName="space-y-3.5 pt-1">
                     <p className="text-[13px] leading-[20px] text-[var(--text-2)] m-0">
-                      在 Claude Desktop、Cursor 等桌面助手里填入下面这段配置，即可直接检索和引用本机会议记录。
+                      在 Antigravity、Claude Code、Cursor、Codex、Claude Desktop
+                      等工具中接入本机会议记忆（只读），随时检索会议、待办、承诺与上下文包。
                     </p>
-                    <div className="relative">
-                      <CopyButton
-                        text={JSON.stringify(mcp.config, null, 2)}
-                        label="复制 JSON"
-                        successToast="已复制 MCP 配置 JSON"
-                        className="absolute right-3 top-3"
+
+                    <label className="inline-flex items-center gap-2 text-[13px] leading-[20px] text-[var(--text)] cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={mcpExcludePrivate}
+                        onChange={(e) => setMcpExcludePrivate(e.target.checked)}
                       />
-                      <pre className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] p-4 pr-24 text-xs leading-[18px] font-mono text-[var(--text-body)] overflow-x-auto m-0">
-                        {JSON.stringify(mcp.config, null, 2)}
-                      </pre>
+                      <span>跳过隐私会议 (--exclude-private)</span>
+                    </label>
+
+                    {(mcp.data_dir || mcp.skill_path) && (
+                      <div className="rounded-[10px] border border-[var(--line-2)] bg-[var(--surface)] px-3 py-2 space-y-1 text-xs leading-[18px]">
+                        {mcp.data_dir && (
+                          <div className="flex items-baseline gap-2 min-w-0">
+                            <span className="text-[var(--muted)] shrink-0">数据目录</span>
+                            <code
+                              title={mcp.data_dir}
+                              className="font-mono text-[var(--text-2)] truncate min-w-0"
+                            >
+                              {mcp.data_dir}
+                            </code>
+                          </div>
+                        )}
+                        {mcp.skill_path && (
+                          <div className="flex items-baseline gap-2 min-w-0">
+                            <span className="text-[var(--muted)] shrink-0">Skill 文件</span>
+                            <code
+                              title={mcp.skill_path}
+                              className="font-mono text-[var(--text-2)] truncate min-w-0"
+                            >
+                              {mcp.skill_path}
+                            </code>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {mcpInstallCmd && (
+                      <div className="rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-3.5 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-[13px] leading-[20px] font-medium text-[var(--text)]">
+                              一键安装 MCP + Skill
+                            </div>
+                            <div className="text-xs leading-[18px] text-[var(--muted)]">
+                              自动写入 Antigravity / Claude Code / Cursor / Codex / Claude Desktop 配置
+                            </div>
+                          </div>
+                          <CopyButton
+                            text={mcpInstallCmd}
+                            label="复制命令"
+                            successToast="已复制一键安装命令"
+                            className="shrink-0"
+                          />
+                        </div>
+                        <pre className="rounded-[8px] bg-[var(--surface-2)] border border-[var(--line-2)] px-3 py-2 text-xs leading-[18px] font-mono text-[var(--text-body)] overflow-x-auto m-0">
+                          {mcpInstallCmd}
+                        </pre>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <div className="text-xs leading-[18px] font-medium text-[var(--text-2)]">
+                        手动配置 JSON
+                      </div>
+                      <div className="relative">
+                        <CopyButton
+                          text={mcpConfigJson}
+                          label="复制 JSON"
+                          successToast="已复制 MCP 配置 JSON"
+                          className="absolute right-3 top-3"
+                        />
+                        <pre className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line)] p-4 pr-24 text-xs leading-[18px] font-mono text-[var(--text-body)] overflow-x-auto m-0">
+                          {mcpConfigJson}
+                        </pre>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {mcp.tools.map((t) => (
-                        <code
-                          key={t}
-                          className="rounded-[6px] bg-[var(--fill)] px-2 py-0.5 text-xs leading-[18px] font-mono text-[var(--text-2)]"
-                        >
-                          {t}
-                        </code>
-                      ))}
+
+                    <div className="space-y-2 pt-0.5">
+                      {mcp.tools.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-xs leading-[18px] text-[var(--muted)] num">
+                            Tools ({mcp.tools.length})
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {mcp.tools.map((t) => (
+                              <code
+                                key={t}
+                                className="rounded-[6px] bg-[var(--fill)] px-2 py-0.5 text-xs leading-[18px] font-mono text-[var(--text-2)]"
+                              >
+                                {t}
+                              </code>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {(mcp.prompts?.length ?? 0) > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-xs leading-[18px] text-[var(--muted)] num">
+                            Prompts ({mcp.prompts?.length ?? 0})
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(mcp.prompts ?? []).map((p) => (
+                              <code
+                                key={p}
+                                className="rounded-[6px] border border-[var(--line)] bg-[var(--surface)] px-2 py-0.5 text-xs leading-[18px] font-mono text-[var(--text-2)]"
+                              >
+                                {p}
+                              </code>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {(mcp.resources?.length ?? 0) > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-xs leading-[18px] text-[var(--muted)] num">
+                            Resources ({mcp.resources?.length ?? 0})
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(mcp.resources ?? []).map((r) => (
+                              <code
+                                key={r}
+                                className="rounded-[6px] border border-[var(--line)] bg-[var(--surface-2)] px-2 py-0.5 text-xs leading-[18px] font-mono text-[var(--text-2)]"
+                              >
+                                {r}
+                              </code>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </Disclosure>
                 </div>

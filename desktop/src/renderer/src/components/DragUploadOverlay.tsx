@@ -1,14 +1,124 @@
 import type { MeetingMeta } from "@shared/types";
 import { Check, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePresence } from "@/components/MotionPrimitives";
-import { uploadWithProgress } from "@/lib/api";
+import { OFFLINE_MSG } from "@/lib/api";
 import { useAppStore } from "@/stores/appStore";
+import { useMeetingStore } from "@/stores/meetingStore";
+import { useRecorderStore } from "@/stores/recorderStore";
+
+function uploadWithAbort<T = unknown>(
+  url: string,
+  formData: FormData,
+  onProgress: (pct: number) => void,
+  signal: AbortSignal,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("已取消导入", "AbortError"));
+      return;
+    }
+
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort);
+    };
+
+    const onAbort = () => {
+      xhr.abort();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) {
+        onProgress(Math.min(99, Math.round((ev.loaded / ev.total) * 100)));
+      }
+    };
+    xhr.onload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        const data = JSON.parse(xhr.responseText || "null");
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress(100);
+          resolve(data as T);
+        } else {
+          reject(new Error(data?.detail || `上传失败 (${xhr.status})`));
+        }
+      } catch {
+        reject(new Error(`上传失败 (${xhr.status})`));
+      }
+    };
+    xhr.onerror = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(OFFLINE_MSG));
+    };
+    xhr.onabort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException("已取消导入", "AbortError"));
+    };
+    xhr.send(formData);
+  });
+}
+
+function canAutoNavigate(startHash: string): boolean {
+  const curHash = window.location.hash || "#/";
+  if (curHash !== startHash) return false;
+
+  const rec = useRecorderStore.getState();
+  if (rec.active || rec.stopping) return false;
+
+  const meetingState = useMeetingStore.getState();
+  if (meetingState.meeting?.live_active || meetingState.meeting?.meta.status === "recording") {
+    return false;
+  }
+
+  const app = useAppStore.getState();
+  if (
+    app.paletteOpen ||
+    app.shortcutsOpen ||
+    app.settingsOpen ||
+    app.sidecarOpen ||
+    app.ambientIntroOpen ||
+    app.vpWizardOpen ||
+    app.trashOpen
+  ) {
+    return false;
+  }
+
+  if (document.querySelector('[role="dialog"], dialog[open], [aria-modal="true"]')) {
+    return false;
+  }
+
+  const activeEl = document.activeElement as HTMLElement | null;
+  if (
+    activeEl &&
+    (activeEl.matches("input, textarea, select, [contenteditable]") ||
+      activeEl.isContentEditable ||
+      Boolean(activeEl.closest("[contenteditable]")))
+  ) {
+    return false;
+  }
+
+  return true;
+}
 
 export function DragUploadOverlay() {
   const navigate = useAppStore((s) => s.navigate);
   const loadMeetings = useAppStore((s) => s.loadMeetings);
   const pushToast = useAppStore((s) => s.pushToast);
+
+  const activeUploadsRef = useRef(0);
+  const abortControllersRef = useRef<Set<AbortController>>(new Set());
+  const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [dragging, setDragging] = useState(false);
   const [uploadPct, setUploadPct] = useState<number | null>(null);
@@ -16,6 +126,13 @@ export function DragUploadOverlay() {
 
   const visible = dragging || uploadPct !== null || doneMark;
   const { mounted, state } = usePresence(visible, 150);
+
+  const cancelActiveUploads = useCallback(() => {
+    for (const ac of abortControllersRef.current) {
+      ac.abort();
+    }
+    abortControllersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     let depth = 0;
@@ -61,6 +178,12 @@ export function DragUploadOverlay() {
       const file = e.dataTransfer?.files?.[0];
       if (!file) return;
 
+      const startHash = window.location.hash || "#/";
+      if (doneTimerRef.current) {
+        clearTimeout(doneTimerRef.current);
+        doneTimerRef.current = null;
+      }
+
       const fd = new FormData();
       fd.append("file", file);
       fd.append("title", file.name.replace(/\.[^.]+$/, ""));
@@ -68,21 +191,50 @@ export function DragUploadOverlay() {
       fd.append("hotword", "");
       fd.append("template", "general");
 
+      const ac = new AbortController();
+      abortControllersRef.current.add(ac);
+      activeUploadsRef.current += 1;
+      setDoneMark(false);
       setUploadPct(0);
+
       try {
-        const meta = await uploadWithProgress<MeetingMeta>("/api/meetings/upload", fd, (pct) =>
-          setUploadPct(pct),
+        const meta = await uploadWithAbort<MeetingMeta>(
+          "/api/meetings/upload",
+          fd,
+          (pct) => {
+            if (activeUploadsRef.current > 0) setUploadPct(pct);
+          },
+          ac.signal,
         );
-        setDoneMark(true);
-        setUploadPct(null);
+        abortControllersRef.current.delete(ac);
+        activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+
         await loadMeetings();
         pushToast(`已导入「${meta.title}」，正在排队转写`, { tone: "success" });
-        setTimeout(() => {
-          setDoneMark(false);
-          navigate(`#/m/${meta.id}`);
-        }, 280);
+
+        if (activeUploadsRef.current === 0) {
+          setUploadPct(null);
+          setDoneMark(true);
+          doneTimerRef.current = setTimeout(() => {
+            doneTimerRef.current = null;
+            setDoneMark(false);
+            if (activeUploadsRef.current === 0 && canAutoNavigate(startHash)) {
+              navigate(`#/m/${meta.id}`);
+            }
+          }, 280);
+        }
       } catch (err) {
-        setUploadPct(null);
+        abortControllersRef.current.delete(ac);
+        activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+        if (activeUploadsRef.current === 0) {
+          setUploadPct(null);
+        }
+        if (err instanceof DOMException && err.name === "AbortError") {
+          if (activeUploadsRef.current === 0) {
+            pushToast("已取消导入");
+          }
+          return;
+        }
         pushToast(err instanceof Error ? err.message : "导入失败", { tone: "error", durationMs: 5000 });
       }
     };
@@ -100,6 +252,14 @@ export function DragUploadOverlay() {
       window.removeEventListener("drop", onDrop);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onWindowBlur);
+      if (doneTimerRef.current) {
+        clearTimeout(doneTimerRef.current);
+        doneTimerRef.current = null;
+      }
+      for (const ac of abortControllersRef.current) {
+        ac.abort();
+      }
+      abortControllersRef.current.clear();
     };
   }, [loadMeetings, navigate, pushToast]);
 
@@ -135,7 +295,19 @@ export function DragUploadOverlay() {
                 style={{ transform: `scaleX(${(pct / 100).toFixed(3)})` }}
               />
             </div>
-            <div className="mt-2 text-xs leading-[18px] text-[var(--muted)] num">{pct}%</div>
+            <div className="mt-2 flex items-center justify-center gap-3">
+              <span className="text-xs leading-[18px] text-[var(--muted)] num">{pct}%</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  cancelActiveUploads();
+                }}
+                className="btn-ghost rounded-[7px] h-7 px-2.5 text-xs leading-[18px] font-medium text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer"
+              >
+                取消上传
+              </button>
+            </div>
           </>
         ) : (
           <>

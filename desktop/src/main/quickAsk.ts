@@ -6,9 +6,11 @@ export interface QuickAskControllerDeps {
   loadUrl: string;
 }
 
-const COMPACT_HEIGHT = 196;
-const MIN_HEIGHT = 184;
-const MAX_HEIGHT = 560;
+const WINDOW_WIDTH = 732;
+const SHADOW_TOP = 24;
+const COMPACT_HEIGHT = 348; // up to 280px card + 68px vertical shadow bleed
+const MIN_HEIGHT = 264;
+const MAX_HEIGHT = 628; // 560px card + 68px vertical shadow bleed
 
 export class QuickAskController {
   private readonly deps: QuickAskControllerDeps;
@@ -27,7 +29,7 @@ export class QuickAskController {
 
     this.loaded = false;
     const win = new BrowserWindow({
-      width: 660,
+      width: WINDOW_WIDTH,
       height: COMPACT_HEIGHT,
       resizable: false,
       minimizable: false,
@@ -36,8 +38,8 @@ export class QuickAskController {
       show: false,
       frame: false,
       transparent: true,
-      hasShadow: true,
-      roundedCorners: true,
+      hasShadow: false,
+      roundedCorners: false,
       alwaysOnTop: true,
       skipTaskbar: true,
       title: "全局闪问",
@@ -97,7 +99,7 @@ export class QuickAskController {
     });
 
     const baseUrl = this.deps.loadUrl.replace(/#.*$/, "");
-    void win.loadURL(`${baseUrl}#/quick-ask`);
+    void win.loadURL(`${baseUrl}#/quick-ask?floating=1`);
     this.win = win;
     return win;
   }
@@ -106,9 +108,11 @@ export class QuickAskController {
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
     const { x, y, width, height } = display.workArea;
-    const winW = win.getSize()[0] ?? 660;
+    const winW = win.getBounds().width || WINDOW_WIDTH;
     const targetX = Math.round(x + (width - winW) / 2);
-    const targetY = Math.round(y + Math.max(48, Math.min(height * 0.18, height - 480)));
+    const targetY = Math.round(
+      Math.max(y + 12, y + Math.max(48, Math.min(height * 0.18, height - 480)) - SHADOW_TOP),
+    );
     win.setPosition(targetX, targetY, false);
   }
 
@@ -120,10 +124,7 @@ export class QuickAskController {
     const display = screen.getDisplayMatching(cur);
     const maxAllowed = Math.max(MIN_HEIGHT, display.workArea.y + display.workArea.height - cur.y - 24);
     const finalH = Math.min(clamped, maxAllowed);
-    this.win.setBounds(
-      { x: cur.x, y: cur.y, width: cur.width, height: finalH },
-      process.platform === "darwin",
-    );
+    this.win.setBounds({ x: cur.x, y: cur.y, width: cur.width, height: finalH }, false);
   }
 
   show(): void {

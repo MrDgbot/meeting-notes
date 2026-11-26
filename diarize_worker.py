@@ -10,32 +10,66 @@
 隐私：pyannote 默认会把用法统计（音频时长、人数、会话 id）发到 otel.pyannote.ai，这里在导入前强制关掉；
 模型从 ModelScope 下载一次（约 31 MB，和 Hugging Face 上 pyannote-community 的文件逐字节相同），之后只从本地目录加载，不再联网。
 """
+import contextlib
 import json
 import os
 import sys
 import time
+import traceback
 
 os.environ["PYANNOTE_METRICS_ENABLED"] = "false"  # 必须在导入 pyannote.audio 之前
 MODEL = "pyannote/speaker-diarization-community-1"
 
 
-def model_dir() -> str:
-    from modelscope import snapshot_download
+def _find_cached_dir() -> str | None:
     try:
-        return snapshot_download(MODEL, local_files_only=True)
-    except Exception:  # noqa: BLE001  还没下载过
-        return snapshot_download(MODEL)
+        from modelscope import snapshot_download
+        p = snapshot_download(MODEL, local_files_only=True)
+        if p and os.path.isdir(p):
+            return p
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import model_manager
+        local_dir = model_manager.find_local_model_dir("pyannote-community-1")
+        if local_dir is not None:
+            return str(local_dir)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
-def diarize(wav: str, num_spk: int = 0) -> dict:
-    import soundfile as sf
+def model_dir(local_only: bool = False) -> str:
+    cached = _find_cached_dir()
+    if cached:
+        return cached
+    if local_only:
+        raise FileNotFoundError(f"{MODEL} not found in local cache")
+    from modelscope import snapshot_download
+    return snapshot_download(MODEL)
+
+
+def _detect_device() -> str:
+    import torch
+    return "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+
+
+def _load_pipeline():
     import torch
     from pyannote.audio import Pipeline
+
     t = time.time()
-    dev = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    dev = _detect_device()
     pipe = Pipeline.from_pretrained(model_dir())
     pipe.to(torch.device(dev))
-    t_load = time.time() - t
+    return pipe, dev, time.time() - t
+
+
+def _infer(pipe, dev: str, wav: str, num_spk: int = 0) -> dict:
+    import soundfile as sf
+    import torch
+
+    t = time.time()
     x, sr = sf.read(wav, dtype="float32")
     if x.ndim > 1:
         x = x[:, 0]
@@ -44,10 +78,95 @@ def diarize(wav: str, num_spk: int = 0) -> dict:
     names: dict = {}
     turns = [[int(seg.start * 1000), int(seg.end * 1000), names.setdefault(spk, len(names))]
              for seg, _, spk in r.exclusive_speaker_diarization.itertracks(yield_label=True) if seg.end > seg.start]
-    return {"turns": turns, "device": dev, "load_s": round(t_load, 1), "run_s": round(time.time() - t - t_load, 1)}
+    return {"turns": turns, "device": dev, "run_s": round(time.time() - t, 1)}
+
+
+def diarize(wav: str, num_spk: int = 0) -> dict:
+    pipe, dev, t_load = _load_pipeline()
+    res = _infer(pipe, dev, wav, num_spk)
+    return {
+        "turns": res["turns"],
+        "device": res["device"],
+        "load_s": round(t_load, 1),
+        "run_s": res["run_s"],
+    }
+
+
+def _probe() -> int:
+    try:
+        dev = _detect_device()
+        cached = _find_cached_dir() is not None
+        print(json.dumps({"ok": True, "worker": "pyannote", "device": dev, "cached": cached}), flush=True)
+        return 0
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"ok": False, "worker": "pyannote", "error": f"{type(e).__name__}: {e}"}), flush=True)
+        return 1
+
+
+def _serve() -> int:
+    proto_out = sys.stdout
+    sys.stdout = sys.stderr
+
+    def emit(obj: dict) -> None:
+        proto_out.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        proto_out.flush()
+
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            pipe, dev, t_load = _load_pipeline()
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
+        emit({"ready": False, "worker": "pyannote", "error": f"{type(e).__name__}: {e}"})
+        return 1
+
+    emit({"ready": True, "worker": "pyannote", "device": dev, "load_s": round(t_load, 1)})
+
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError as e:
+            emit({"id": None, "ok": False, "error": f"invalid json: {e}"})
+            continue
+        if not isinstance(req, dict):
+            emit({"id": None, "ok": False, "error": "request must be a JSON object"})
+            continue
+
+        req_id = req.get("id")
+        cmd = req.get("cmd")
+        if cmd == "ping":
+            emit({"id": req_id, "ok": True, "pong": True, "worker": "pyannote", "device": dev})
+            continue
+        if cmd == "shutdown":
+            emit({"id": req_id, "ok": True, "shutdown": True})
+            break
+        if cmd not in (None, "diarize"):
+            emit({"id": req_id, "ok": False, "error": f"unknown cmd: {cmd}"})
+            continue
+
+        wav = req.get("wav")
+        if not wav or not isinstance(wav, str):
+            emit({"id": req_id, "ok": False, "error": "missing wav path"})
+            continue
+        try:
+            num_spk = int(req.get("num_spk") or 0)
+            with contextlib.redirect_stdout(sys.stderr):
+                res = _infer(pipe, dev, wav, num_spk)
+            res["load_s"] = 0.0
+            emit({"id": req_id, "ok": True, "result": res})
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc(file=sys.stderr)
+            emit({"id": req_id, "ok": False, "error": f"{type(e).__name__}: {e}"})
+    return 0
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--probe":
+        raise SystemExit(_probe())
+    if len(sys.argv) >= 2 and sys.argv[1] == "--serve":
+        raise SystemExit(_serve())
     res = diarize(sys.argv[1], int(sys.argv[3]) if len(sys.argv) > 3 else 0)
     with open(sys.argv[2], "w") as f:
         json.dump(res, f)

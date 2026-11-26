@@ -28,9 +28,10 @@ import voiceprints  # noqa: E402
 @contextmanager
 def _isolated():
     tmp = Path(tempfile.mkdtemp(prefix="mn-insights-"))
-    old_data, old_m, old_daily = store.DATA, store.MEETINGS, app_mod.DAILY
+    old_data, old_m, old_settings, old_daily = store.DATA, store.MEETINGS, store.SETTINGS, app_mod.DAILY
     store.DATA = tmp
     store.MEETINGS = tmp / "meetings"
+    store.SETTINGS = tmp / "settings.json"
     app_mod.DAILY = tmp / "daily"
     store.MEETINGS.mkdir(parents=True, exist_ok=True)
     with store.locked():
@@ -42,6 +43,7 @@ def _isolated():
     finally:
         store.DATA = old_data
         store.MEETINGS = old_m
+        store.SETTINGS = old_settings
         app_mod.DAILY = old_daily
         with store.locked():
             store._meta_cache.clear()
@@ -342,3 +344,101 @@ def test_projects_global_ask_weekly_and_api_endpoints():
         assert wg.status_code == 200
         assert wg.json()["report"]["markdown"] == rep["markdown"]
         assert wg.json()["meeting_count"] == 2
+
+
+def test_quick_ask_suggestions_llm_cache_refresh_and_local_fallback():
+    with _isolated():
+        today = datetime.now().strftime("%Y-%m-%d")
+        # 1) 空工作区返回默认 local 推荐
+        empty_res = asyncio.run(insights.quick_ask_suggestions(None))
+        assert empty_res["mode"] == "local"
+        assert empty_res["suggestions"] == insights.DEFAULT_QUICK_ASK_SUGGESTIONS
+
+        # 2) 写入会议与隐私排除会议
+        _seed_meeting(
+            f"{today.replace('-', '')}-100000-sg1",
+            title="Apollo 计费改造评审",
+            created=f"{today}T10:00:00",
+            speakers={"0": "陈总", "1": "王工"},
+            paragraphs=[
+                {"start": 0, "end": 5000, "spk": 0, "text": "Apollo 计费月底前切流，请王工确认账单幂等。"},
+            ],
+        )
+        _seed_meeting(
+            f"{today.replace('-', '')}-110000-sg2",
+            title="Apollo 灰度方案同步",
+            created=f"{today}T11:00:00",
+            speakers={"0": "王工"},
+            paragraphs=[
+                {"start": 0, "end": 5000, "spk": 0, "text": "我明天把 Apollo 灰度回滚预案发给大家。"},
+            ],
+        )
+        _seed_meeting(
+            f"{today.replace('-', '')}-120000-sg3",
+            title="绝密薪酬复盘",
+            created=f"{today}T12:00:00",
+            paragraphs=[{"start": 0, "end": 4000, "spk": 0, "text": "绝密薪酬调整不要入学习。"}],
+        )
+        store.update(f"{today.replace('-', '')}-120000-sg3", rsi_exclude=True)
+
+        calls = 0
+        seen_prompts: list[str] = []
+
+        async def fake_chat(prov, msgs, **kw):
+            nonlocal calls
+            calls += 1
+            seen_prompts.append(msgs[-1]["content"])
+            if calls == 1:
+                return '```json\n["Apollo 计费切流和回滚方案", "王工负责的账单幂等进度", "近期 Apollo 评审遗留风险"]\n```'
+            return '["Apollo 灰度发布时间节点", "陈总对计费改造的核心要求", "Apollo 待确认的账单边界"]'
+
+        prov = {"name": "mock", "model": "deepseek-chat", "base_url": "https://example.com/v1", "api_key": "k"}
+        orig_chat = llm.chat
+        llm.chat = fake_chat
+        try:
+            r1 = asyncio.run(insights.quick_ask_suggestions(prov))
+            assert r1["mode"] == "llm"
+            assert r1["cached"] is False
+            assert len(r1["suggestions"]) == 3
+            assert calls == 1
+            assert "绝密薪酬" not in seen_prompts[0]
+            assert "Apollo" in seen_prompts[0]
+
+            # 相同指纹与模型应命中磁盘缓存
+            r2 = asyncio.run(insights.quick_ask_suggestions(prov))
+            assert r2["mode"] == "llm"
+            assert r2["cached"] is True
+            assert r2["suggestions"] == r1["suggestions"]
+            assert calls == 1
+
+            # refresh=True 跳过缓存并带入上一批问题提示词
+            r3 = asyncio.run(insights.quick_ask_suggestions(prov, refresh=True))
+            assert r3["mode"] == "llm"
+            assert r3["cached"] is False
+            assert calls == 2
+            assert "Apollo 计费切流和回滚方案" in seen_prompts[1]
+
+            # HTTP 接口校验（命中缓存）
+            client = TestClient(app_mod.app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+            resp = client.get("/api/ask-global/suggestions")
+            assert resp.status_code == 200
+            assert len(resp.json()["suggestions"]) == 3
+        finally:
+            llm.chat = orig_chat
+
+        # 3) LLM 异常或未配置时降级为基于用户数据的 local 推荐
+        async def fail_chat(prov, msgs, **kw):
+            raise RuntimeError("boom")
+
+        llm.chat = fail_chat
+        try:
+            r_err = asyncio.run(insights.quick_ask_suggestions(prov, refresh=True))
+            assert r_err["mode"] == "local"
+            assert r_err["cached"] is False
+            assert any("Apollo" in q for q in r_err["suggestions"])
+        finally:
+            llm.chat = orig_chat
+
+        r_noprov = asyncio.run(insights.quick_ask_suggestions(None, refresh=True))
+        assert r_noprov["mode"] == "local"
+        assert any("Apollo" in q for q in r_noprov["suggestions"])

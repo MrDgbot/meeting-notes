@@ -210,6 +210,53 @@ export interface AsrConfig {
   doubao_ddc: boolean;
 }
 
+export interface HostMemoryStatus {
+  total_bytes: number | null;
+  available_bytes: number | null;
+  used_bytes: number | null;
+  percent: number | null;
+  commit_avail_bytes?: number | null;
+  source: string;
+  cuda_free_bytes?: number | null;
+  cuda_total_bytes?: number | null;
+}
+
+export interface ModelCatalogItem {
+  id: string;
+  label: string;
+  role: string;
+  repo: string;
+  sources: string[];
+  ready: boolean;
+  path: string | null;
+}
+
+export interface ModelDownloadTask {
+  id: string;
+  model_id: string;
+  repo: string;
+  source: string;
+  selected_source: string | null;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed" | "interrupted" | string;
+  done_bytes: number;
+  total_bytes: number;
+  progress: number;
+  current_file: string | null;
+  dst_dir: string;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelStatusResponse {
+  models: ModelCatalogItem[];
+  by_id: Record<string, ModelCatalogItem>;
+  roots: string[];
+  gguf: Array<{ name: string; path: string; size: number; root: string }>;
+  custom_models: Array<{ model_id: string | null; name: string; path: string; root: string }>;
+  task: ModelDownloadTask | null;
+}
+
 export interface VocabFix {
   from: string;
   to: string;
@@ -327,6 +374,8 @@ export interface RsiState {
   voiceprints?: {
     tau_auto?: number;
     tau_suggest?: number;
+    clean_auto_streak?: number;
+    recovery_streak_target?: number;
     persons?: { name: string; sessions?: number; voiced_s?: number }[];
     conflicts?: unknown[];
   };
@@ -337,14 +386,30 @@ export interface RsiState {
     dismissed_count?: number;
   };
   ambient?: {
-    devices?: { device?: string; noise_floor_p20_db?: number; vad_false_ratio?: number }[];
+    devices?: {
+      device?: string;
+      p10_db?: number | null;
+      noise_floor_p20_db?: number | null;
+      vad_convs?: number;
+      vad_false_ratio?: number | null;
+    }[];
     discard_stats?: {
       purged_7d?: number;
       restored?: number;
       restored_7d?: number;
       user_deleted_short?: number;
     };
-    advice?: { warning?: string; suggested_min_speech_s?: number; reason?: string };
+    advice?: {
+      warning?: string;
+      suggested_min_speech_s?: number | null;
+      reason?: string;
+      suggested_sensitivity?: string | null;
+      sensitivity_reason?: string;
+      environment?: string;
+      acoustic_device?: string;
+      p10_db?: number | null;
+      vad_false_ratio?: number | null;
+    };
   };
   registry?: { at?: string | number; kind?: string; detail?: string }[];
   error?: string;
@@ -372,10 +437,15 @@ export interface LanStatus {
 export interface McpConfigResponse {
   server_path: string;
   workspace: string;
+  data_dir?: string;
+  skill_path?: string;
+  install_cmd?: string;
   config: {
-    mcpServers: Record<string, { command: string; args: string[] }>;
+    mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }>;
   };
   tools: string[];
+  prompts?: string[];
+  resources?: string[];
 }
 
 export interface RelatedMeeting {
@@ -547,11 +617,19 @@ export interface VoiceprintClusterSample {
   text: string;
 }
 
+export interface VoiceprintClusterSuggestion {
+  name: string;
+  score: number;
+  margin: number;
+  high_confidence?: boolean;
+}
+
 export interface VoiceprintCluster {
   cluster_id: string;
   meeting_count: number;
   total_voiced_s: number;
   avg_cos: number;
+  suggested_match?: VoiceprintClusterSuggestion | null;
   members: VoiceprintClusterMember[];
   samples: VoiceprintClusterSample[];
 }
@@ -610,6 +688,13 @@ export interface GlobalAskResponse {
   answer: string;
   citations: GlobalAskCitation[];
   mode: "llm" | "search";
+}
+
+export interface GlobalAskSuggestionsResponse {
+  suggestions: string[];
+  mode: "llm" | "local";
+  cached?: boolean;
+  generated_at?: string;
 }
 
 export interface ProjectMeetingSummary {

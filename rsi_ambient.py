@@ -16,6 +16,7 @@ import store
 
 VALID_OUTCOMES = frozenset({"restored", "purged_7d", "user_deleted_short"})
 MAX_NOISE_SAMPLES = 200
+MAX_VAD_SAMPLES = 50
 MAX_DISCARDS = 500
 ADVICE_MIN_SAMPLES = 20
 ADVICE_WINDOW_S = 30 * 86400
@@ -25,6 +26,14 @@ MIN_SPEECH_HI = 60
 MAX_STEP_S = 5.0
 FALSE_DISCARD_WEIGHT = 3
 FALSE_KEEP_WEIGHT = 1
+
+ACOUSTIC_MIN_SAMPLES = 10
+NOISY_FLOOR_DB = -38.0
+QUIET_FLOOR_DB = -50.0
+VAD_FALSE_HIGH = 0.45
+VAD_FALSE_MODERATE = 0.30
+VAD_FALSE_LOW = 0.15
+SENS_LABELS = {"normal": "标准", "high": "高", "max": "很高"}
 
 _lock = threading.RLock()
 
@@ -96,6 +105,18 @@ def record_noise_floor(device: str, p10_db: float) -> None:
         _save_db(db)
 
 
+def _vad_stats(d: dict) -> tuple[int, float | None]:
+    """优先使用最近 MAX_VAD_SAMPLES 场滑动窗口统计 VAD 空触发率，兼容旧版累计字段。"""
+    raw_samples = d.get("vad_samples")
+    if isinstance(raw_samples, list) and raw_samples:
+        vals = [float(x) for x in raw_samples if isinstance(x, (int, float)) and math.isfinite(float(x))]
+        if vals:
+            return len(vals), round(sum(vals) / len(vals), 3)
+    convs = int(d.get("vad_convs") or 0)
+    false_sum = float(d.get("vad_false_sum") or 0.0)
+    return convs, (round(false_sum / convs, 3) if convs > 0 else None)
+
+
 def record_conv_vad(device: str, speech_ms: float, voiced_ms: float) -> None:
     if rsi_events.is_excluded():
         return
@@ -115,10 +136,29 @@ def record_conv_vad(device: str, speech_ms: float, voiced_ms: float) -> None:
             "p10_db": None,
             "vad_convs": 0,
             "vad_false_sum": 0.0,
+            "vad_samples": [],
             "updated_at": "",
         })
         d["vad_convs"] = int(d.get("vad_convs") or 0) + 1
         d["vad_false_sum"] = round(float(d.get("vad_false_sum") or 0.0) + false_ratio, 4)
+        samples = [float(x) for x in (d.get("vad_samples") or []) if isinstance(x, (int, float)) and math.isfinite(float(x))]
+        samples.append(round(false_ratio, 4))
+        d["vad_samples"] = samples[-MAX_VAD_SAMPLES:]
+        d["updated_at"] = _now_iso()
+        _save_db(db)
+
+
+def reset_vad_stats(device: str = "") -> None:
+    """调整收音灵敏度后重置该设备的 VAD 空触发窗口（保留环境底噪 p10_db），避免旧灵敏度历史误导新配置建议。"""
+    dev = (device or "").strip() or "default"
+    with _lock:
+        db = _load_db()
+        d = (db.get("devices") or {}).get(dev)
+        if not isinstance(d, dict):
+            return
+        d["vad_convs"] = 0
+        d["vad_false_sum"] = 0.0
+        d["vad_samples"] = []
         d["updated_at"] = _now_iso()
         _save_db(db)
 
@@ -173,8 +213,130 @@ def _recent_discards(discards: list[dict], window_s: float, now: float) -> list[
     return out
 
 
-def advice(current_min_speech_s: float, *, now: float | None = None) -> dict:
-    """基于近 30 天回收站与短录反馈计算 min_speech_s 调优建议及 7 天恢复哨兵预警。"""
+def _select_device_profile(db: dict, device: str = "") -> tuple[str, dict] | None:
+    devices = db.get("devices") or {}
+    if not isinstance(devices, dict) or not devices:
+        return None
+    explicit = (device or "").strip()
+    if explicit:
+        return (explicit, devices[explicit]) if isinstance(devices.get(explicit), dict) else None
+    if "default" in devices and isinstance(devices["default"], dict):
+        return "default", devices["default"]
+    ranked = sorted(
+        ((k, v) for k, v in devices.items() if isinstance(v, dict)),
+        key=lambda kv: (_vad_stats(kv[1])[0], len(kv[1].get("noise_samples") or []), kv[0]),
+        reverse=True,
+    )
+    return ranked[0] if ranked else None
+
+
+def _acoustic_guidance(
+    db: dict,
+    *,
+    current_sensitivity: str = "",
+    device: str = "",
+    restored_7d: int = 0,
+) -> dict:
+    """结合设备环境底噪 p10_db 与 VAD 空触发率，输出声学环境评估与灵敏度调优建议（不自动改写配置）。"""
+    sel = _select_device_profile(db, device)
+    if not sel:
+        return {
+            "acoustic_device": "",
+            "environment": "unknown",
+            "p10_db": None,
+            "vad_false_ratio": None,
+            "suggested_sensitivity": None,
+            "sensitivity_reason": "",
+        }
+    dev_name, d = sel
+    p10 = d.get("p10_db")
+    p10_val = float(p10) if isinstance(p10, (int, float)) and math.isfinite(float(p10)) else None
+    n_noise = len(d.get("noise_samples") or [])
+    convs, false_ratio = _vad_stats(d)
+
+    if p10_val is None:
+        env = "unknown"
+        env_label = "未知"
+    elif p10_val > NOISY_FLOOR_DB:
+        env = "noisy"
+        env_label = "偏嘈杂"
+    elif p10_val <= QUIET_FLOOR_DB:
+        env = "quiet"
+        env_label = "较安静"
+    else:
+        env = "moderate"
+        env_label = "适中"
+
+    cur_sens = (current_sensitivity or "").strip().lower()
+    if cur_sens not in SENS_LABELS:
+        cur_sens = ""
+
+    suggested: str | None = None
+    reason = ""
+    enough_vad = convs >= ACOUSTIC_MIN_SAMPLES and false_ratio is not None
+    enough_noise = n_noise >= ACOUSTIC_MIN_SAMPLES and p10_val is not None
+
+    if enough_vad and false_ratio >= VAD_FALSE_HIGH:
+        target = "high" if cur_sens == "max" else ("normal" if cur_sens == "high" else None)
+        suggested = target
+        if target:
+            reason = (
+                f"近 {convs} 段对话 VAD 空触发率 {false_ratio:.0%}"
+                + (f"（底噪 {p10_val:.1f} dB，{env_label}）" if p10_val is not None else "")
+                + f"，建议将收音灵敏度从「{SENS_LABELS[cur_sens]}」调低至「{SENS_LABELS[target]}」以减少杂音误录"
+            )
+        else:
+            reason = (
+                f"近 {convs} 段对话 VAD 空触发率 {false_ratio:.0%}"
+                + (f"（底噪 {p10_val:.1f} dB，{env_label}）" if p10_val is not None else "")
+                + "，环境杂音偏多，可适当调高最短有效发言时长或检查麦克风位置"
+            )
+    elif enough_noise and env == "noisy" and (not enough_vad or (false_ratio is not None and false_ratio >= VAD_FALSE_MODERATE)):
+        target = "high" if cur_sens == "max" else ("normal" if cur_sens == "high" else None)
+        suggested = target
+        if target:
+            vad_part = f"、VAD 空触发率 {false_ratio:.0%}" if false_ratio is not None else ""
+            reason = (
+                f"环境底噪 {p10_val:.1f} dB（{env_label}{vad_part}），"
+                f"建议将收音灵敏度从「{SENS_LABELS[cur_sens]}」调低至「{SENS_LABELS[target]}」"
+            )
+        else:
+            reason = f"环境底噪 {p10_val:.1f} dB（{env_label}），当前已处于防误触优先设置"
+    elif enough_noise and env == "quiet" and enough_vad and false_ratio <= VAD_FALSE_LOW and restored_7d >= 1:
+        if cur_sens == "normal":
+            suggested = "high"
+            reason = (
+                f"环境底噪 {p10_val:.1f} dB（{env_label}）且 VAD 空触发率仅 {false_ratio:.0%}，"
+                f"近 7 天有 {restored_7d} 次恢复记录，建议将收音灵敏度从「标准」调高至「高」以提升远场拾音"
+            )
+    if not reason and (enough_noise or enough_vad):
+        parts = []
+        if p10_val is not None:
+            parts.append(f"底噪 {p10_val:.1f} dB（{env_label}）")
+        if false_ratio is not None:
+            parts.append(f"VAD 空触发率 {false_ratio:.0%}（{convs} 段）")
+        if parts:
+            cur_note = f"，当前「{SENS_LABELS[cur_sens]}」灵敏度适配良好" if cur_sens else ""
+            reason = "，".join(parts) + cur_note
+
+    return {
+        "acoustic_device": dev_name,
+        "environment": env,
+        "p10_db": p10_val,
+        "vad_false_ratio": false_ratio,
+        "suggested_sensitivity": suggested,
+        "sensitivity_reason": reason,
+    }
+
+
+def advice(
+    current_min_speech_s: float,
+    *,
+    now: float | None = None,
+    current_sensitivity: str = "",
+    device: str = "",
+) -> dict:
+    """基于近 30 天回收站与短录反馈计算 min_speech_s 调优建议、7 天恢复预警及声学画像灵敏度建议。"""
     now = time.time() if now is None else now
     cur = float(current_min_speech_s)
     with _lock:
@@ -188,6 +350,12 @@ def advice(current_min_speech_s: float, *, now: float | None = None) -> dict:
         if restored_7d >= 2
         else ""
     )
+    acoustic = _acoustic_guidance(
+        db,
+        current_sensitivity=current_sensitivity,
+        device=device,
+        restored_7d=restored_7d,
+    )
 
     n = len(recent_30d)
     if n < ADVICE_MIN_SAMPLES:
@@ -197,6 +365,7 @@ def advice(current_min_speech_s: float, *, now: float | None = None) -> dict:
             "warning": warning,
             "samples": n,
             "need_more": ADVICE_MIN_SAMPLES - n,
+            **acoustic,
         }
 
     def _eval(t: float) -> tuple[int, int, int]:
@@ -232,6 +401,7 @@ def advice(current_min_speech_s: float, *, now: float | None = None) -> dict:
             "warning": warning,
             "samples": n,
             "need_more": 0,
+            **acoustic,
         }
 
     direction = "调低" if suggested < cur else "调高"
@@ -246,10 +416,17 @@ def advice(current_min_speech_s: float, *, now: float | None = None) -> dict:
         "warning": warning,
         "samples": n,
         "need_more": 0,
+        **acoustic,
     }
 
 
-def summary(current_min_speech_s: float = 20.0, *, now: float | None = None) -> dict:
+def summary(
+    current_min_speech_s: float = 20.0,
+    *,
+    now: float | None = None,
+    current_sensitivity: str = "",
+    device: str = "",
+) -> dict:
     now = time.time() if now is None else now
     with _lock:
         db = _load_db()
@@ -257,8 +434,7 @@ def summary(current_min_speech_s: float = 20.0, *, now: float | None = None) -> 
     for dev, d in sorted(db["devices"].items()):
         if not isinstance(d, dict):
             continue
-        convs = int(d.get("vad_convs") or 0)
-        false_sum = float(d.get("vad_false_sum") or 0.0)
+        convs, false_ratio = _vad_stats(d)
         n_samples = len(d.get("noise_samples") or [])
         devices.append({
             "device": dev,
@@ -266,8 +442,8 @@ def summary(current_min_speech_s: float = 20.0, *, now: float | None = None) -> 
             "noise_floor_p20_db": d.get("p10_db"),
             "noise_samples": n_samples,
             "samples": n_samples,
-            "vad_convs": convs,
-            "vad_false_ratio": round(false_sum / convs, 3) if convs > 0 else None,
+            "vad_convs": int(d.get("vad_convs") or convs),
+            "vad_false_ratio": false_ratio,
             "updated_at": str(d.get("updated_at") or ""),
         })
 
@@ -282,7 +458,12 @@ def summary(current_min_speech_s: float = 20.0, *, now: float | None = None) -> 
     return {
         "devices": devices,
         "discard_stats": discard_stats,
-        "advice": advice(current_min_speech_s, now=now),
+        "advice": advice(
+            current_min_speech_s,
+            now=now,
+            current_sensitivity=current_sensitivity,
+            device=device,
+        ),
     }
 
 

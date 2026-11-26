@@ -9,7 +9,8 @@
     (() => {
       try {
         const root = document.documentElement;
-        if ((location.hash || "").startsWith("#/quick-ask")) {
+        const h = location.hash || "";
+        if (h.startsWith("#/quick-ask") && h.includes("floating=1")) {
           root.dataset.window = "quick-ask";
         }
         const raw = localStorage.getItem("theme");

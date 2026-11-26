@@ -35,6 +35,13 @@ MAX_OVERRIDES = 100
 MAX_AUTO_MEETINGS = 50
 SENTINEL_WINDOW = 10
 SENTINEL_OVERRIDES = 2
+RECOVERY_STREAK = 10
+RECOVERY_STEP = 0.02
+CLUSTER_SUGGEST_MIN_COS = 0.62
+CLUSTER_SUGGEST_SINGLE_PERSON_MIN_COS = 0.74
+CLUSTER_SUGGEST_SINGLE_PERSON_HIGH_COS = 0.78
+CLUSTER_COOCCUR_EXCLUDE_RATIO = 0.35
+CLUSTER_COOCCUR_OVERRIDE_COS = 0.84
 
 GENERIC_RE = re.compile(r"^说话人\s*\d+$")
 GENERIC_NAMES = frozenset({"我", "对方", "主持人", "我方", "参会人", "未知"} | set(minutes_check.OWNER_SKIP))
@@ -177,6 +184,7 @@ def _default_db() -> dict:
         "version": 1,
         "tau_auto": DEFAULT_TAU_AUTO,
         "tau_suggest": DEFAULT_TAU_SUGGEST,
+        "clean_auto_streak": 0,
         "persons": {},
         "conflicts": [],
         "overrides": [],
@@ -191,6 +199,7 @@ def _load_db() -> dict:
     db = _default_db()
     db["tau_auto"] = float(raw.get("tau_auto") or DEFAULT_TAU_AUTO)
     db["tau_suggest"] = float(raw.get("tau_suggest") or DEFAULT_TAU_SUGGEST)
+    db["clean_auto_streak"] = max(0, int(raw.get("clean_auto_streak") or 0))
     if isinstance(raw.get("persons"), dict):
         db["persons"] = raw["persons"]
     if isinstance(raw.get("conflicts"), list):
@@ -508,15 +517,41 @@ def rename_person(old_name: str, new_name: str) -> dict:
     return {"moved": len(old_sess), "merged": existed, "sessions": sessions_cnt, "migrated_keys": migrated_keys}
 
 
-def record_auto_named(mid: str) -> None:
+def record_auto_named(mid: str) -> dict:
+    """记录一场自动命名会议；若阈值被哨兵抬高后连续 RECOVERY_STREAK 场无撤回，则逐步回落至默认阈值。"""
     if not mid:
-        return
+        return {"recovered": False}
+    recovered: dict | None = None
     with _lock:
         db = _load_db()
+        is_new = mid not in db["auto_meetings"]
         mids = [m for m in db["auto_meetings"] if m != mid]
         mids.append(mid)
         db["auto_meetings"] = mids[-MAX_AUTO_MEETINGS:]
+        cur_tau = float(db["tau_auto"])
+        if cur_tau <= DEFAULT_TAU_AUTO:
+            db["clean_auto_streak"] = 0
+        elif is_new:
+            db["clean_auto_streak"] = int(db.get("clean_auto_streak") or 0) + 1
+            if db["clean_auto_streak"] >= RECOVERY_STREAK:
+                new_tau = max(DEFAULT_TAU_AUTO, round(cur_tau - RECOVERY_STEP, 2))
+                db["tau_auto"] = new_tau
+                db["clean_auto_streak"] = 0
+                recovered = {"from": cur_tau, "to": new_tau, "clean_meetings": RECOVERY_STREAK}
+                rsi_events.log_registry({
+                    "loop": "A",
+                    "action": "recover_tau_auto",
+                    "from": cur_tau,
+                    "to": new_tau,
+                    "clean_meetings": RECOVERY_STREAK,
+                    "mid": mid,
+                    "reason": f"连续 {RECOVERY_STREAK} 场自动命名零撤回，自动回落阈值 {cur_tau:.2f} → {new_tau:.2f}",
+                })
         _save_db(db)
+    if recovered:
+        rsi_events.emit("voiceprint_tau_recover", {"mid": mid, **recovered})
+        return {"recovered": True, **recovered}
+    return {"recovered": False}
 
 
 def record_override(mid: str, spk: int | str, old_name: str, new_name: str) -> dict:
@@ -524,6 +559,7 @@ def record_override(mid: str, spk: int | str, old_name: str, new_name: str) -> d
     spk_key = str(spk)
     with _lock:
         db = _load_db()
+        db["clean_auto_streak"] = 0
         if mid and mid not in db["auto_meetings"]:
             db["auto_meetings"].append(mid)
             db["auto_meetings"] = db["auto_meetings"][-MAX_AUTO_MEETINGS:]
@@ -719,6 +755,8 @@ def summary() -> dict:
     return {
         "tau_auto": db["tau_auto"],
         "tau_suggest": db["tau_suggest"],
+        "clean_auto_streak": int(db.get("clean_auto_streak") or 0),
+        "recovery_streak_target": RECOVERY_STREAK,
         "persons": persons,
         "conflicts": list(reversed(db.get("conflicts") or []))[:20],
     }
@@ -800,6 +838,11 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
             continue
         spks = spk_embs.get("speakers") if isinstance(spk_embs.get("speakers"), dict) else {}
         named_map = meta.get("speakers") or {}
+        named_pairs = [
+            (str(k), str(v or "").strip())
+            for k, v in named_map.items()
+            if str(v or "").strip() and not is_generic_name(str(v or "").strip())
+        ]
         for sk_raw, entry in spks.items():
             if not isinstance(entry, dict) or not entry.get("centroid"):
                 continue
@@ -815,6 +858,7 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
             vec = _unit_vec(entry["centroid"])
             if vec is None:
                 continue
+            co_names = {nm for k, nm in named_pairs if k != sk}
             nodes.append({
                 "mid": mid,
                 "spk": sk,
@@ -824,6 +868,7 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
                 "n_chunks": n_chunks,
                 "intra_cos_mean": round(intra, 3),
                 "vec": vec,
+                "co_names": co_names,
             })
 
     nodes.sort(key=lambda x: (-x["voiced_s"], x["created"]))
@@ -857,6 +902,51 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
                 best_cl["centroid"] = norm_c
             best_cl["pair_scores"].append(best_cos)
 
+    # 二次合并：把会议集合完全不重叠且加权质心余弦 >= cos_thres 的碎片簇合并，减少同人被拆成多簇
+    merged_any = True
+    while merged_any and len(clusters) > 1:
+        merged_any = False
+        best_pair: tuple[int, int, float] | None = None
+        for i in range(len(clusters)):
+            mids_i = {m["mid"] for m in clusters[i]["members"]}
+            ci = clusters[i]["centroid"]
+            for j in range(i + 1, len(clusters)):
+                if any(m["mid"] in mids_i for m in clusters[j]["members"]):
+                    continue
+                cj = clusters[j]["centroid"]
+                if ci.shape != cj.shape:
+                    continue
+                sc = float(np.dot(ci, cj))
+                if sc >= cos_thres and (best_pair is None or sc > best_pair[2]):
+                    best_pair = (i, j, sc)
+        if best_pair is not None:
+            i, j, sc = best_pair
+            ci_obj, cj_obj = clusters[i], clusters[j]
+            ci_obj["members"].extend(cj_obj["members"])
+            ci_obj["sum_vec"] = ci_obj["sum_vec"] + cj_obj["sum_vec"]
+            norm_c = _unit_vec(ci_obj["sum_vec"])
+            if norm_c is not None:
+                ci_obj["centroid"] = norm_c
+            ci_obj["pair_scores"].extend(cj_obj["pair_scores"])
+            ci_obj["pair_scores"].append(sc)
+            clusters.pop(j)
+            merged_any = True
+
+    with _lock:
+        db = _load_db()
+        tau_auto = float(db["tau_auto"])
+        tau_suggest = float(db["tau_suggest"])
+        persons_raw = dict(db["persons"])
+
+    known_vecs: dict[str, np.ndarray] = {}
+    for pname, pdata in persons_raw.items():
+        if not isinstance(pdata, dict):
+            continue
+        pv = _unit_vec(pdata.get("centroid"))
+        if pv is not None:
+            known_vecs[pname] = pv
+    min_cluster_suggest = max(tau_suggest, CLUSTER_SUGGEST_MIN_COS)
+
     out: list[dict] = []
     for cl in clusters:
         members = cl["members"]
@@ -869,6 +959,46 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
             if cl["pair_scores"]
             else round(float(members[0]["intra_cos_mean"]), 3)
         )
+        suggested_match: dict | None = None
+        cv = cl["centroid"]
+        if known_vecs and cv is not None:
+            scored: list[tuple[float, str]] = []
+            for pname, pv in known_vecs.items():
+                if pv.shape != cv.shape:
+                    continue
+                scored.append((float(np.dot(cv, pv)), pname))
+            if scored:
+                scored.sort(key=lambda t: (-t[0], t[1]))
+                best_s, best_p = scored[0]
+                single_person = len(scored) == 1
+                second_s = scored[1][0] if not single_person else 0.0
+                margin = best_s - second_s
+                # 若候选人已在当前簇相当比例的场次里被标为其他说话人，多半是同室共现同事而非同一人；
+                # 仅当余弦达到 CLUSTER_COOCCUR_OVERRIDE_COS（0.84，高把握同人被切分）时才允许建议。
+                cooccur_mids = {m["mid"] for m in members if best_p in (m.get("co_names") or ())}
+                cooccur_ratio = len(cooccur_mids) / max(1, meeting_cnt)
+                cooccur_conflict = (
+                    bool(cooccur_mids)
+                    and cooccur_ratio >= CLUSTER_COOCCUR_EXCLUDE_RATIO
+                    and best_s < CLUSTER_COOCCUR_OVERRIDE_COS
+                )
+                eff_min_suggest = (
+                    max(min_cluster_suggest, round(tau_auto + 0.06, 4), CLUSTER_SUGGEST_SINGLE_PERSON_MIN_COS)
+                    if single_person
+                    else min_cluster_suggest
+                )
+                high_conf_floor = (
+                    max(round(tau_auto + 0.10, 4), CLUSTER_SUGGEST_SINGLE_PERSON_HIGH_COS)
+                    if single_person
+                    else tau_auto
+                )
+                if not cooccur_conflict and best_s >= eff_min_suggest and (single_person or margin >= MIN_MARGIN_AUTO):
+                    suggested_match = {
+                        "name": best_p,
+                        "score": round(best_s, 4),
+                        "margin": round(margin, 4),
+                        "high_confidence": bool(best_s >= high_conf_floor),
+                    }
         samples = _pick_cluster_samples(members, limit=3)
         cid_seed = "|".join(f"{m['mid']}:{m['spk']}" for m in sorted(members, key=lambda x: (x["mid"], x["spk"])))
         cid = f"cl-{hashlib.sha1(cid_seed.encode('utf-8')).hexdigest()[:8]}"
@@ -877,6 +1007,7 @@ def cluster_unnamed_speakers(days: int = 14, cos_thres: float = 0.70, limit: int
             "meeting_count": meeting_cnt,
             "total_voiced_s": total_voiced,
             "avg_cos": avg_cos,
+            "suggested_match": suggested_match,
             "members": [
                 {
                     "mid": m["mid"],
@@ -917,6 +1048,7 @@ def batch_name_cluster(name: str, members: list[dict]) -> dict:
             continue
         seen.add((mid, spk_k))
 
+        meta: dict | None = None
         with store.locked():
             meta = store.get(mid)
             if not meta:
@@ -931,6 +1063,9 @@ def batch_name_cluster(name: str, members: list[dict]) -> dict:
             store.update(mid, speakers=speakers, speaker_meta=smeta)
             updated_meetings.append(mid)
 
+        if rsi_events.is_excluded(meta):
+            skipped += 1
+            continue
         spk_embs = store.load(mid, "spk_embs.json")
         res = enroll(mid, spk_k, clean_name, spk_embs)
         st = res.get("status")

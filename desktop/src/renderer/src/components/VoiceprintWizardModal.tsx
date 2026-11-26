@@ -303,9 +303,27 @@ export function VoiceprintWizardModal() {
                           出现 {cl.meeting_count} 场 · 累计 {fmtDur(cl.total_voiced_s)}
                         </span>
                       </div>
-                      <span className="rounded-full bg-[var(--ok-soft)] text-[var(--ok)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0">
-                        {cl.avg_cos >= 0.82 ? "高把握同一人" : "疑似同一人"}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {cl.suggested_match && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNameMap((m) => ({
+                                ...m,
+                                [cl.cluster_id]: cl.suggested_match?.name ?? "",
+                              }))
+                            }
+                            title="点此填入推测的说话人姓名"
+                            className="rounded-full bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors num"
+                          >
+                            {cl.suggested_match.high_confidence ? "高把握疑似 " : "疑似 "}
+                            {cl.suggested_match.name}（{Math.round(cl.suggested_match.score * 100)}%）· 填入
+                          </button>
+                        )}
+                        <span className="rounded-full bg-[var(--ok-soft)] text-[var(--ok)] px-2.5 py-0.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0">
+                          {cl.avg_cos >= 0.82 ? "高把握同一人" : "疑似同一人"}
+                        </span>
+                      </div>
                     </div>
 
                     {activeSample && (

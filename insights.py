@@ -719,6 +719,355 @@ async def global_ask(query: str, prov: dict | None) -> dict:
     return {"query": q, "answer": "\n".join(lines), "citations": citations, "mode": "search"}
 
 
+DEFAULT_QUICK_ASK_SUGGESTIONS = [
+    "上周答应给客户的方案",
+    "近期反复提到的风险或问题",
+    "尚未完成的待办和截止时间",
+]
+SUGGESTIONS_TTL_S = 6 * 3600
+SUGGESTIONS_ERROR_TTL_S = 300
+_SUGGEST_GENERIC_SPK_RE = re.compile(r"^(?:说话人\s*\d+|我|对方|主持人|我方|参会人|未知)$")
+
+
+def _suggestions_cache_path() -> Path:
+    return _daily_dir() / "quick_ask_suggestions.json"
+
+
+def _collect_suggestion_snapshot(limit_meetings: int = 12) -> dict:
+    metas = [
+        m for m in store.list_all()
+        if m.get("id") and not rsi_events.is_excluded(m)
+    ]
+    metas.sort(key=lambda m: str(m.get("created") or ""), reverse=True)
+
+    meetings: list[dict] = []
+    for meta in metas[:limit_meetings]:
+        mid = str(meta.get("id") or "")
+        title = str(meta.get("title") or mid).strip()
+        brief = str(meta.get("brief") or "").strip()
+        tags = [str(t).strip() for t in (meta.get("tags") or []) if str(t).strip()][:3]
+        speakers: list[str] = []
+        for raw_name in (meta.get("speakers") or {}).values():
+            nm = str(raw_name or "").strip()
+            if nm and not _SUGGEST_GENERIC_SPK_RE.fullmatch(nm) and nm not in speakers:
+                speakers.append(nm)
+            if len(speakers) >= 4:
+                break
+        excerpt = ""
+        if not brief:
+            paras = _load_paras_for_meeting(mid)
+            if paras:
+                snippets = [str(p.get("text") or "").strip() for p in paras[:3] if str(p.get("text") or "").strip()]
+                excerpt = " ".join(snippets)[:80]
+            else:
+                mn = store.load(mid, "minutes.json")
+                md = str(mn.get("markdown") or "") if isinstance(mn, dict) else ""
+                for ln in md.splitlines():
+                    clean_ln = ln.strip().lstrip("#-* ").strip()
+                    if clean_ln:
+                        excerpt = clean_ln[:80]
+                        break
+        meetings.append({
+            "id": mid,
+            "date": str(meta.get("created") or "")[:10],
+            "title": title,
+            "brief": brief,
+            "tags": tags,
+            "speakers": speakers,
+            "excerpt": excerpt,
+        })
+
+    commitments = list_commitments(status="open", days=14).get("items") or []
+    open_commits = [
+        {
+            "id": str(c.get("id") or ""),
+            "who": str(c.get("who") or "").strip(),
+            "text": str(c.get("text") or "").strip()[:50],
+            "due_hint": str(c.get("due_hint") or "").strip(),
+            "overdue": bool(c.get("overdue")),
+        }
+        for c in commitments[:6]
+        if str(c.get("text") or "").strip()
+    ]
+
+    todos_resp = relations.list_todos(status="open")
+    open_todos = [
+        {
+            "text": str(t.get("text") or "").strip()[:50],
+            "meeting_title": str(t.get("meeting_title") or "").strip()[:24],
+        }
+        for t in (todos_resp.get("items") or [])[:6]
+        if str(t.get("text") or "").strip()
+    ]
+    todo_open_count = int((todos_resp.get("counts") or {}).get("open") or len(todos_resp.get("items") or []))
+
+    projects_raw = relations.list_projects(days=30, limit=5) or []
+    projects = [
+        {
+            "name": str(p.get("name") or "").strip(),
+            "meeting_count": int(p.get("meeting_count") or 0),
+        }
+        for p in projects_raw
+        if str(p.get("name") or "").strip()
+    ]
+
+    fp_payload = {
+        "m": [[x["id"], x["title"], x["brief"]] for x in meetings],
+        "c": [c["id"] for c in open_commits],
+        "t": todo_open_count,
+        "p": [p["name"] for p in projects],
+    }
+    fingerprint = hashlib.sha1(json.dumps(fp_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return {
+        "fingerprint": fingerprint,
+        "meetings": meetings,
+        "commitments": open_commits,
+        "todos": open_todos,
+        "todo_open_count": todo_open_count,
+        "projects": projects,
+    }
+
+
+def _add_unique_suggestion(items: list[str], candidate: str, limit: int) -> None:
+    s = re.sub(r"\s+", " ", str(candidate or "")).strip().strip("「」\"'“”`")
+    if len(s) < 4 or len(s) > 24:
+        return
+    key = s.lower()
+    if any(x.lower() == key for x in items):
+        return
+    if len(items) < limit:
+        items.append(s)
+
+
+def local_quick_ask_suggestions(snapshot: dict, limit: int = 3) -> list[str]:
+    out: list[str] = []
+    projects = snapshot.get("projects") or []
+    commitments = snapshot.get("commitments") or []
+    meetings = snapshot.get("meetings") or []
+    todos = snapshot.get("todos") or []
+
+    if projects:
+        pname = str(projects[0].get("name") or "").strip()[:10]
+        if pname:
+            _add_unique_suggestion(out, f"{pname} 近期进展与结论", limit)
+
+    if commitments:
+        c0 = commitments[0]
+        who = str(c0.get("who") or "").strip()
+        if who and not _SUGGEST_GENERIC_SPK_RE.fullmatch(who) and len(who) <= 6:
+            _add_unique_suggestion(out, f"{who} 负责的跟进进度", limit)
+        else:
+            _add_unique_suggestion(out, "最近未完承诺和截止时间", limit)
+
+    if meetings:
+        m0 = meetings[0]
+        mtitle = str(m0.get("title") or "").strip()
+        if mtitle and not _AUTO_TITLE_RE.match(mtitle):
+            short_title = mtitle[:10]
+            _add_unique_suggestion(out, f"「{short_title}」核心结论", limit)
+
+    if todos:
+        _add_unique_suggestion(out, "尚未完成的待办和截止时间", limit)
+
+    for fallback in DEFAULT_QUICK_ASK_SUGGESTIONS:
+        if len(out) >= limit:
+            break
+        _add_unique_suggestion(out, fallback, limit)
+    return out[:limit]
+
+
+def parse_suggestions_json(raw: str, limit: int = 3) -> list[str]:
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    m = _JSON_FENCE_RE.search(s)
+    if m:
+        s = m.group(1).strip()
+    else:
+        arr_l, arr_r = s.find("["), s.rfind("]")
+        obj_l, obj_r = s.find("{"), s.rfind("}")
+        if arr_l >= 0 and arr_r > arr_l and (obj_l < 0 or arr_l < obj_l):
+            s = s[arr_l : arr_r + 1]
+        elif obj_l >= 0 and obj_r > obj_l:
+            s = s[obj_l : obj_r + 1]
+
+    try:
+        parsed = json.loads(s)
+    except json.JSONDecodeError:
+        return []
+
+    raw_list: list = []
+    if isinstance(parsed, list):
+        raw_list = parsed
+    elif isinstance(parsed, dict):
+        for k in ("suggestions", "questions", "items"):
+            if isinstance(parsed.get(k), list):
+                raw_list = parsed[k]
+                break
+
+    out: list[str] = []
+    for item in raw_list:
+        txt = str(item or "").strip()
+        txt = re.sub(r"^(?:\d+[.)、]|[-*•])\s*", "", txt).strip()
+        _add_unique_suggestion(out, txt, limit)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def build_quick_ask_suggestions_messages(
+    snapshot: dict,
+    limit: int = 3,
+    *,
+    previous: list[str] | None = None,
+) -> list[dict]:
+    sections: list[str] = []
+    projects = snapshot.get("projects") or []
+    if projects:
+        proj_str = "、".join(f"{p['name']}({p['meeting_count']}场)" for p in projects[:5])
+        sections.append(f"近期活跃专题：{proj_str}")
+
+    commitments = snapshot.get("commitments") or []
+    if commitments:
+        c_lines = [
+            f"- {c['who'] + '：' if c['who'] else ''}{c['text']}"
+            + (f"（{c['due_hint']}）" if c["due_hint"] else ("（已超期）" if c["overdue"] else ""))
+            for c in commitments[:5]
+        ]
+        sections.append("未完成约定：\n" + "\n".join(c_lines))
+
+    todos = snapshot.get("todos") or []
+    if todos:
+        t_lines = [
+            f"- {t['text']}" + (f" [{t['meeting_title']}]" if t["meeting_title"] else "")
+            for t in todos[:5]
+        ]
+        sections.append(f"未完成待办（共 {snapshot.get('todo_open_count', len(todos))} 项）：\n" + "\n".join(t_lines))
+
+    meetings = snapshot.get("meetings") or []
+    if meetings:
+        m_lines = []
+        for m in meetings[:10]:
+            summary_part = m["brief"] or m["excerpt"]
+            tags_part = f" [{'/'.join(m['tags'])}]" if m["tags"] else ""
+            spk_part = f" 参会:{','.join(m['speakers'])}" if m["speakers"] else ""
+            m_lines.append(f"- [{m['date']}] {m['title']}{tags_part}{spk_part}" + (f"：{summary_part}" if summary_part else ""))
+        sections.append("近期会议记录：\n" + "\n".join(m_lines))
+
+    context_text = "\n\n".join(sections)[:1800]
+    prev_hint = ""
+    if previous:
+        prev_hint = f"\n5. 请从不同于上一批的新视角提问，不要重复以下问题：{json.dumps(previous, ensure_ascii=False)}"
+
+    prompt = (
+        f"请根据用户真实的近期会议、待办与约定数据，生成 {limit} 条最值得现在点击查询的「全局闪问」推荐问题。\n"
+        "要求：\n"
+        f"1. 只输出一个 JSON 字符串数组，包含 {limit} 个问题，不要任何解释。\n"
+        "2. 每个问题严格控制在 8 到 16 个汉字（或等价中英混合短句），简短精炼，方便单行按钮展示。\n"
+        "3. 必须紧扣下面真实数据里的具体项目名、人物、未完待办或核心议题，禁止输出空泛套话。\n"
+        "4. 问题之间覆盖不同维度（如：某专题进展/结论、某人承诺/卡点、近期风险或待办跟进）。"
+        f"{prev_hint}\n\n"
+        f"用户数据摘要：\n{context_text}"
+    )
+    return [
+        {"role": "system", "content": "你是个人会议记忆助手，只返回合法 JSON 字符串数组。"},
+        {"role": "user", "content": prompt},
+    ]
+
+
+async def quick_ask_suggestions(prov: dict | None, *, refresh: bool = False, limit: int = 3) -> dict:
+    snapshot = _collect_suggestion_snapshot()
+    has_data = bool(
+        snapshot["meetings"] or snapshot["commitments"] or snapshot["todos"] or snapshot["projects"]
+    )
+    if not has_data:
+        return {
+            "suggestions": DEFAULT_QUICK_ASK_SUGGESTIONS[:limit],
+            "mode": "local",
+            "cached": False,
+            "generated_at": _now_iso(),
+        }
+
+    cache_path = _suggestions_cache_path()
+    cached_obj = store.read_json(cache_path)
+    fp = snapshot["fingerprint"]
+    usable = _provider_usable(prov)
+    model_key = f"{prov.get('base_url')}|{prov.get('model')}" if usable and isinstance(prov, dict) else ""
+    now_ts = time.time()
+
+    if not refresh and isinstance(cached_obj, dict):
+        c_items = [str(x) for x in (cached_obj.get("suggestions") or []) if str(x).strip()]
+        c_mode = str(cached_obj.get("mode") or "local")
+        c_expires = float(cached_obj.get("expires_at") or 0)
+        c_fp = str(cached_obj.get("fingerprint") or "")
+        c_model = str(cached_obj.get("model_key") or "")
+        model_ok = (not usable) or (c_mode == "llm" and c_model == model_key)
+        if c_items and c_fp == fp and now_ts < c_expires and model_ok:
+            return {
+                "suggestions": c_items[:limit],
+                "mode": c_mode,
+                "cached": True,
+                "generated_at": str(cached_obj.get("generated_at") or _now_iso()),
+            }
+
+    previous = (
+        [str(x) for x in (cached_obj.get("suggestions") or []) if str(x).strip()]
+        if refresh and isinstance(cached_obj, dict)
+        else None
+    )
+
+    if usable and isinstance(prov, dict):
+        msgs = build_quick_ask_suggestions_messages(snapshot, limit=limit, previous=previous)
+        max_tok = 2000 if llm._is_reasoning_model(str(prov.get("model") or "")) else 600
+        try:
+            raw = await asyncio.wait_for(
+                llm.chat(prov, msgs, temperature=0.75 if refresh else 0.4, max_tokens=max_tok),
+                timeout=25.0,
+            )
+            items = parse_suggestions_json(raw, limit=limit)
+            if len(items) >= 2:
+                if len(items) < limit:
+                    for fb in local_quick_ask_suggestions(snapshot, limit=limit):
+                        _add_unique_suggestion(items, fb, limit)
+                gen_at = _now_iso()
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                store.write_json(cache_path, {
+                    "fingerprint": fp,
+                    "mode": "llm",
+                    "model_key": model_key,
+                    "suggestions": items[:limit],
+                    "generated_at": gen_at,
+                    "expires_at": now_ts + SUGGESTIONS_TTL_S,
+                })
+                return {
+                    "suggestions": items[:limit],
+                    "mode": "llm",
+                    "cached": False,
+                    "generated_at": gen_at,
+                }
+        except Exception:  # noqa: BLE001
+            pass
+
+    items = local_quick_ask_suggestions(snapshot, limit=limit)
+    gen_at = _now_iso()
+    ttl = SUGGESTIONS_ERROR_TTL_S if usable else SUGGESTIONS_TTL_S
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    store.write_json(cache_path, {
+        "fingerprint": fp,
+        "mode": "local",
+        "model_key": "",
+        "suggestions": items,
+        "generated_at": gen_at,
+        "expires_at": now_ts + ttl,
+    })
+    return {
+        "suggestions": items,
+        "mode": "local",
+        "cached": False,
+        "generated_at": gen_at,
+    }
+
+
 def week_bounds(end_date: str | None = None) -> tuple[str, str, str]:
     if end_date:
         dt = datetime.strptime(end_date, "%Y-%m-%d")

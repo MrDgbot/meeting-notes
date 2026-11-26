@@ -1,6 +1,6 @@
 import { buildSpeakerMap, fmtTs, tsLabel } from "@shared/format";
 import type { AudioPeaks, MarkItem, MeetingDetail, SegMapEntry, TranscriptParagraph } from "@shared/types";
-import { Flag, Pause, Play, RotateCcw, RotateCw } from "lucide-react";
+import { Flag, Pause, Play, RotateCcw, RotateCw, Scissors, Volume2, VolumeX } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useMeetingStore } from "@/stores/meetingStore";
@@ -17,6 +17,69 @@ interface AudioPlayerProps {
 }
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
+const ZOOM_LEVELS = [1, 2, 4, 8, 16] as const;
+const SIL_OPTS = [
+  ["fast2", "静音×2"],
+  ["fast3", "静音×3"],
+  ["fast4", "静音×4"],
+  ["fast6", "静音×6"],
+  ["fast8", "静音×8"],
+  ["skip", "跳过静音"],
+  ["off", "静音原速"],
+] as const;
+
+type ZoomLevel = (typeof ZOOM_LEVELS)[number];
+type SilenceMode = (typeof SIL_OPTS)[number][0];
+
+function loadSilenceMode(): SilenceMode {
+  try {
+    const saved = localStorage.getItem("silenceMode");
+    if (SIL_OPTS.some(([k]) => k === saved)) return saved as SilenceMode;
+    if (localStorage.getItem("skipSilence") === "1") {
+      localStorage.setItem("silenceMode", "skip");
+      return "skip";
+    }
+  } catch {}
+  return "off";
+}
+
+function loadMuted(): boolean {
+  try {
+    return localStorage.getItem("audioMuted") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function quietAt(sec: number, quiet: [number, number][]): [number, number] | null {
+  let lo = 0;
+  let hi = quiet.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const q = quiet[mid];
+    if (!q) break;
+    if (sec < q[0]) hi = mid - 1;
+    else if (sec >= q[1]) lo = mid + 1;
+    else return q;
+  }
+  return null;
+}
+
+function isModalOpenNow(): boolean {
+  const app = useAppStore.getState();
+  if (
+    app.paletteOpen ||
+    app.shortcutsOpen ||
+    app.settingsOpen ||
+    app.sidecarOpen ||
+    app.ambientIntroOpen ||
+    app.vpWizardOpen ||
+    app.trashOpen
+  ) {
+    return true;
+  }
+  return Boolean(document.querySelector('[role="dialog"], dialog[open], [aria-modal="true"]'));
+}
 
 function findParaAt(ms: number, list: TranscriptParagraph[]): TranscriptParagraph | null {
   if (!list.length) return null;
@@ -57,10 +120,20 @@ export function AudioPlayer({
   const headRef = useRef<HTMLDivElement>(null);
   const hoverLineRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const dragModeRef = useRef<"scrub" | "select" | null>(null);
+  const selAnchorRef = useRef(0);
+  const draggingHandleRef = useRef<"start" | "end" | null>(null);
   const lastUiSyncRef = useRef(0);
   const lastDrawSecRef = useRef(0);
   const curSecRef = useRef(0);
   const durSecRef = useRef(durationHint || 0);
+  const fastingRef = useRef(false);
+  const speedRef = useRef(1);
+  const silenceModeRef = useRef<SilenceMode>("off");
+  const zoomRef = useRef<ZoomLevel>(1);
+  const viewStartRef = useRef(0);
+  const panAutoFollowRef = useRef(true);
+  const rangePlayEndRef = useRef<number | null>(null);
 
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const pushToast = useAppStore((s) => s.pushToast);
@@ -72,8 +145,15 @@ export function AudioPlayer({
   const [dragging, setDragging] = useState(false);
   const [curSec, setCurSec] = useState(0);
   const [durSec, setDurSec] = useState(durationHint || 0);
+  const [buffered, setBuffered] = useState<Array<[number, number]>>([]);
   const [kickDir, setKickDir] = useState<"back" | "fwd" | null>(null);
   const [skipBadge, setSkipBadge] = useState<string | null>(null);
+  const [fastRateBadge, setFastRateBadge] = useState<number | null>(null);
+  const [muted, setMuted] = useState<boolean>(loadMuted);
+  const [zoom, setZoom] = useState<ZoomLevel>(1);
+  const [viewStart, setViewStart] = useState(0);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
   const [speed, setSpeed] = useState<number>(() => {
     try {
       const saved = Number(localStorage.getItem("playSpeed"));
@@ -82,13 +162,7 @@ export function AudioPlayer({
       return 1;
     }
   });
-  const [skipSilence, setSkipSilence] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("skipSilence") === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [silenceMode, setSilenceMode] = useState<SilenceMode>(loadSilenceMode);
   const [hoverInfo, setHoverInfo] = useState<{
     xPct: number;
     label: string;
@@ -98,8 +172,19 @@ export function AudioPlayer({
 
   durSecRef.current = durSec;
   curSecRef.current = curSec;
+  speedRef.current = speed;
+  silenceModeRef.current = silenceMode;
+  zoomRef.current = zoom;
+  viewStartRef.current = viewStart;
 
-  const audioSrc = `/api/meetings/${encodeURIComponent(mid)}/audio`;
+  const totalDur = Math.max(durSec, 0.1);
+  const viewSpan = totalDur / zoom;
+  const maxViewStart = Math.max(0, totalDur - viewSpan);
+  const clampedViewStart = zoom <= 1 ? 0 : Math.max(0, Math.min(maxViewStart, viewStart));
+  const viewEnd = Math.min(totalDur, clampedViewStart + viewSpan);
+  viewStartRef.current = clampedViewStart;
+
+  const audioSrc = `/api/meetings/${encodeURIComponent(mid)}/audio?v=${encodeURIComponent(String(durationHint || 0))}`;
   const spkMap = useMemo(() => buildSpeakerMap(meeting), [meeting]);
 
   const quietSecTotal = useMemo(() => {
@@ -108,14 +193,16 @@ export function AudioPlayer({
   }, [peaks]);
 
   const spkSegments = useMemo(() => {
-    const total = Math.max(durSec, 0.1);
     if (!paras.length) return [];
     const out: Array<{ leftPct: number; widthPct: number; color: string }> = [];
     for (const p of paras) {
       const sSec = Math.max(0, p.start / 1000);
       const eSec = Math.max(sSec + 0.05, p.end / 1000);
-      const leftPct = (sSec / total) * 100;
-      const widthPct = Math.min(100 - leftPct, Math.max(0.35, ((eSec - sSec) / total) * 100));
+      if (eSec <= clampedViewStart || sSec >= viewEnd) continue;
+      const cs = Math.max(clampedViewStart, sSec);
+      const ce = Math.min(viewEnd, eSec);
+      const leftPct = ((cs - clampedViewStart) / viewSpan) * 100;
+      const widthPct = Math.min(100 - leftPct, Math.max(0.35, ((ce - cs) / viewSpan) * 100));
       out.push({
         leftPct,
         widthPct,
@@ -123,7 +210,21 @@ export function AudioPlayer({
       });
     }
     return out;
-  }, [paras, durSec, spkMap]);
+  }, [paras, clampedViewStart, viewEnd, viewSpan, spkMap]);
+
+  const bufferedSegments = useMemo(() => {
+    if (!buffered.length) return [];
+    const out: Array<{ leftPct: number; widthPct: number }> = [];
+    for (const [bs, be] of buffered) {
+      if (be <= clampedViewStart || bs >= viewEnd) continue;
+      const cs = Math.max(clampedViewStart, bs);
+      const ce = Math.min(viewEnd, be);
+      const leftPct = ((cs - clampedViewStart) / viewSpan) * 100;
+      const widthPct = Math.min(100 - leftPct, Math.max(0, ((ce - cs) / viewSpan) * 100));
+      if (widthPct > 0) out.push({ leftPct, widthPct });
+    }
+    return out;
+  }, [buffered, clampedViewStart, viewEnd, viewSpan]);
 
   const positionHead = useCallback((sec: number) => {
     const head = headRef.current;
@@ -132,13 +233,21 @@ export function AudioPlayer({
     const w = canvas.getBoundingClientRect().width;
     if (w <= 0) return;
     const total = Math.max(durSecRef.current, 0.1);
-    const ratio = Math.max(0, Math.min(1, sec / total));
+    const z = zoomRef.current;
+    const vSpan = total / z;
+    const vStart = z <= 1 ? 0 : Math.max(0, Math.min(total - vSpan, viewStartRef.current));
+    const ratio = (sec - vStart) / vSpan;
+    if (ratio < 0 || ratio > 1) {
+      head.style.opacity = "0";
+      return;
+    }
+    head.style.opacity = "1";
     const headX = Math.max(1, Math.min(w - 1, ratio * w));
     head.style.transform = `translate3d(${headX.toFixed(2)}px, 0, 0)`;
   }, []);
 
   const drawWave = useCallback(
-    (overrideSec?: number, overrideDur?: number) => {
+    (overrideSec?: number, overrideDur?: number, overrideViewStart?: number) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
@@ -174,23 +283,49 @@ export function AudioPlayer({
 
       const total = Math.max(overrideDur ?? durSecRef.current, 0.1);
       const secVal = overrideSec ?? curSecRef.current;
-      const curRatio = Math.max(0, Math.min(1, secVal / total));
+      const z = zoom;
+      const vSpan = total / z;
+      const vStart =
+        z <= 1 ? 0 : Math.max(0, Math.min(total - vSpan, overrideViewStart ?? viewStartRef.current));
+      const vEnd = Math.min(total, vStart + vSpan);
+
+      if (peaks?.quiet?.length && silenceMode !== "off") {
+        ctx.save();
+        ctx.fillStyle = dark ? "rgba(255, 159, 10, 0.16)" : "rgba(217, 119, 6, 0.12)";
+        for (const [qs, qe] of peaks.quiet) {
+          if (qe <= vStart || qs >= vEnd) continue;
+          const cs = Math.max(vStart, qs);
+          const ce = Math.min(vEnd, qe);
+          const x1 = ((cs - vStart) / vSpan) * rect.width;
+          const x2 = ((ce - vStart) / vSpan) * rect.width;
+          ctx.fillRect(x1, 0, Math.max(1.5, x2 - x1), rect.height);
+        }
+        ctx.restore();
+      }
 
       const levels = peaks?.levels;
       if (levels?.length) {
-        const bars = Math.min(levels.length, Math.max(48, Math.floor(rect.width / 2.6)));
+        const bars = Math.max(48, Math.floor(rect.width / 2.6));
         const step = rect.width / bars;
         const barW = Math.max(1.2, step - 1);
         const midY = rect.height / 2;
 
         for (let i = 0; i < bars; i++) {
-          const srcIdx = Math.min(levels.length - 1, Math.floor((i / bars) * levels.length));
-          const amp = Math.max(0.08, Math.min(1, levels[srcIdx] ?? 0.1));
+          const t0 = vStart + (i / bars) * vSpan;
+          const t1 = vStart + ((i + 1) / bars) * vSpan;
+          const i0 = Math.max(0, Math.min(levels.length - 1, Math.floor((t0 / total) * levels.length)));
+          const i1 = Math.max(i0 + 1, Math.min(levels.length, Math.ceil((t1 / total) * levels.length)));
+          let peak = 0;
+          for (let j = i0; j < i1; j++) {
+            const val = levels[j] ?? 0;
+            if (val > peak) peak = val;
+          }
+          const amp = Math.max(0.08, Math.min(1, peak));
           const barH = Math.max(3, amp * (rect.height - 4));
           const x = i * step;
           const y = midY - barH / 2;
-          const ratio = (i + 0.5) / bars;
-          ctx.fillStyle = ratio <= curRatio ? playedColor : idleColor;
+          const barSec = (t0 + t1) * 0.5;
+          ctx.fillStyle = barSec <= secVal ? playedColor : idleColor;
           if (typeof ctx.roundRect === "function" && barW >= 1.4) {
             ctx.beginPath();
             ctx.roundRect(x, y, barW, barH, Math.min(barW / 2, 1.5));
@@ -200,27 +335,19 @@ export function AudioPlayer({
           }
         }
       } else {
+        const playedRatioInView = Math.max(0, Math.min(1, (secVal - vStart) / vSpan));
         ctx.fillStyle = idleColor;
         ctx.fillRect(0, rect.height / 2 - 2, rect.width, 4);
         ctx.fillStyle = playedColor;
-        ctx.fillRect(0, rect.height / 2 - 2, rect.width * curRatio, 4);
-      }
-
-      if (peaks?.quiet?.length && skipSilence) {
-        ctx.save();
-        ctx.globalAlpha = 0.45;
-        ctx.fillStyle = markColor;
-        for (const [qs] of peaks.quiet) {
-          const x = Math.max(0, Math.min(rect.width - 1.5, (qs / total) * rect.width));
-          ctx.fillRect(x, 0, 1.5, rect.height);
-        }
-        ctx.restore();
+        ctx.fillRect(0, rect.height / 2 - 2, rect.width * playedRatioInView, 4);
       }
 
       if (marks.length) {
         ctx.fillStyle = markColor;
         for (const m of marks) {
-          const x = Math.max(2, Math.min(rect.width - 2, (m.t_ms / 1000 / total) * rect.width));
+          const mSec = m.t_ms / 1000;
+          if (mSec < vStart || mSec > vEnd) continue;
+          const x = Math.max(2, Math.min(rect.width - 2, ((mSec - vStart) / vSpan) * rect.width));
           ctx.fillRect(x - 0.75, 0, 1.5, rect.height);
         }
       }
@@ -228,12 +355,75 @@ export function AudioPlayer({
       ctx.restore();
       positionHead(secVal);
     },
-    [peaks, marks, skipSilence, resolvedTheme, positionHead],
+    [peaks, marks, resolvedTheme, positionHead, silenceMode, zoom],
   );
 
+  const stopFastSilence = useCallback(() => {
+    if (!fastingRef.current) return;
+    fastingRef.current = false;
+    setFastRateBadge(null);
+    const audio = audioRef.current;
+    if (audio) audio.playbackRate = speedRef.current;
+  }, []);
+
+  const ensureViewContains = useCallback((sec: number) => {
+    const z = zoomRef.current;
+    if (z <= 1) return;
+    const total = Math.max(durSecRef.current, 0.1);
+    const vSpan = total / z;
+    const vStart = viewStartRef.current;
+    const vEnd = vStart + vSpan;
+    if (sec < vStart || sec > vEnd) {
+      const nextStart = Math.max(0, Math.min(total - vSpan, sec - vSpan * 0.25));
+      viewStartRef.current = nextStart;
+      setViewStart(nextStart);
+    }
+  }, []);
+
+  const applyZoom = useCallback((nextZoom: ZoomLevel, anchorSec?: number) => {
+    const total = Math.max(durSecRef.current, 0.1);
+    if (nextZoom <= 1) {
+      zoomRef.current = 1;
+      viewStartRef.current = 0;
+      panAutoFollowRef.current = true;
+      setZoom(1);
+      setViewStart(0);
+      return;
+    }
+    const prevSpan = total / zoomRef.current;
+    const prevStart = Math.max(0, Math.min(total - prevSpan, viewStartRef.current));
+    const prevEnd = prevStart + prevSpan;
+    const anchor = anchorSec ?? curSecRef.current;
+    const ratioInView =
+      prevSpan > 0 && anchor >= prevStart && anchor <= prevEnd ? (anchor - prevStart) / prevSpan : 0.5;
+    const nextSpan = total / nextZoom;
+    const nextStart = Math.max(0, Math.min(total - nextSpan, anchor - ratioInView * nextSpan));
+    zoomRef.current = nextZoom;
+    viewStartRef.current = nextStart;
+    panAutoFollowRef.current = true;
+    setZoom(nextZoom);
+    setViewStart(nextStart);
+  }, []);
+
+  const syncBuffered = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const out: Array<[number, number]> = [];
+    try {
+      for (let i = 0; i < audio.buffered.length; i++) {
+        const s = audio.buffered.start(i);
+        const e = audio.buffered.end(i);
+        if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+          out.push([s, e]);
+        }
+      }
+    } catch {}
+    setBuffered(out);
+  }, []);
+
   useEffect(() => {
-    drawWave(curSec, durSec);
-  }, [drawWave, curSec, durSec]);
+    drawWave(curSec, durSec, clampedViewStart);
+  }, [drawWave, curSec, durSec, clampedViewStart]);
 
   useEffect(() => {
     const track = trackRef.current;
@@ -248,6 +438,85 @@ export function AudioPlayer({
     return () => ro.disconnect();
   }, [drawWave]);
 
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = track.getBoundingClientRect();
+        const ratio = rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0.5;
+        const total = Math.max(durSecRef.current, 0.1);
+        const vSpan = total / zoomRef.current;
+        const anchor = viewStartRef.current + ratio * vSpan;
+        const curIdx = ZOOM_LEVELS.indexOf(zoomRef.current);
+        const nextIdx = e.deltaY < 0 ? Math.min(ZOOM_LEVELS.length - 1, curIdx + 1) : Math.max(0, curIdx - 1);
+        const nextZoom = ZOOM_LEVELS[nextIdx] ?? 1;
+        if (nextZoom !== zoomRef.current) applyZoom(nextZoom, anchor);
+        return;
+      }
+      if (zoomRef.current > 1 && (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey)) {
+        e.preventDefault();
+        const total = Math.max(durSecRef.current, 0.1);
+        const vSpan = total / zoomRef.current;
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        const rect = track.getBoundingClientRect();
+        const shiftSec = rect.width > 0 ? (delta / rect.width) * vSpan : 0;
+        const nextStart = Math.max(0, Math.min(total - vSpan, viewStartRef.current + shiftSec));
+        panAutoFollowRef.current = curSecRef.current >= nextStart && curSecRef.current <= nextStart + vSpan;
+        viewStartRef.current = nextStart;
+        setViewStart(nextStart);
+      }
+    };
+    track.addEventListener("wheel", onWheel, { passive: false });
+    return () => track.removeEventListener("wheel", onWheel);
+  }, [applyZoom]);
+
+  const applySilenceTick = useCallback(
+    (audio: HTMLAudioElement, sec: number): number => {
+      const mode = silenceModeRef.current;
+      const quiet = peaks?.quiet;
+      if (
+        audio.paused ||
+        draggingRef.current ||
+        draggingHandleRef.current ||
+        mode === "off" ||
+        !quiet?.length
+      ) {
+        stopFastSilence();
+        return sec;
+      }
+      const q = quietAt(sec, quiet);
+      if (q && mode === "skip") {
+        stopFastSilence();
+        if (q[1] - sec > 0.3 && q[1] - q[0] >= 0.5) {
+          const maxD = Number.isFinite(audio.duration) ? audio.duration : durSecRef.current;
+          const target = Math.min(maxD || q[1], q[1]);
+          const jumped = target - sec;
+          audio.currentTime = target;
+          if (jumped >= 0.5) {
+            setSkipBadge(`已跳过 ${jumped.toFixed(1)}s 停顿`);
+          }
+          return target;
+        }
+        return sec;
+      }
+      if (q && mode.startsWith("fast")) {
+        const boost = Number(mode.slice(4));
+        const targetRate = Math.max(speedRef.current, Number.isFinite(boost) ? boost : speedRef.current);
+        if (!fastingRef.current || audio.playbackRate !== targetRate) {
+          fastingRef.current = true;
+          audio.playbackRate = targetRate;
+          setFastRateBadge(targetRate);
+        }
+        return sec;
+      }
+      stopFastSilence();
+      return sec;
+    },
+    [peaks, stopFastSilence],
+  );
+
   // 60fps playhead loop while playing, keeping React state throttled to ~5Hz
   useEffect(() => {
     if (!playing) return;
@@ -255,24 +524,51 @@ export function AudioPlayer({
     const tick = () => {
       const audio = audioRef.current;
       if (!audio || audio.paused) return;
-      if (draggingRef.current) {
+      if (draggingRef.current || draggingHandleRef.current) {
         raf = requestAnimationFrame(tick);
         return;
       }
       let sec = audio.currentTime;
-      if (skipSilence && peaks?.quiet?.length) {
-        for (const [qs, qe] of peaks.quiet) {
-          if (sec >= qs + 0.15 && sec < qe - 0.15 && qe - qs >= 0.8) {
-            const jumped = qe - sec;
-            audio.currentTime = qe;
-            sec = qe;
-            if (jumped >= 0.8) {
-              setSkipBadge(`已跳过 ${jumped.toFixed(1)}s 停顿`);
-            }
-            break;
+      const rangeEnd = rangePlayEndRef.current;
+      if (rangeEnd !== null && sec >= rangeEnd) {
+        rangePlayEndRef.current = null;
+        audio.pause();
+        audio.currentTime = rangeEnd;
+        curSecRef.current = rangeEnd;
+        setCurSec(rangeEnd);
+        positionHead(rangeEnd);
+        drawWave(rangeEnd);
+        setPlaybackState(rangeEnd * 1000, false);
+        return;
+      }
+
+      sec = applySilenceTick(audio, sec);
+      if (rangeEnd !== null && sec >= rangeEnd) {
+        rangePlayEndRef.current = null;
+        audio.pause();
+        audio.currentTime = rangeEnd;
+        curSecRef.current = rangeEnd;
+        setCurSec(rangeEnd);
+        positionHead(rangeEnd);
+        drawWave(rangeEnd);
+        setPlaybackState(rangeEnd * 1000, false);
+        return;
+      }
+
+      if (zoomRef.current > 1 && panAutoFollowRef.current) {
+        const total = Math.max(durSecRef.current, 0.1);
+        const vSpan = total / zoomRef.current;
+        const vStart = viewStartRef.current;
+        const vEnd = vStart + vSpan;
+        if (sec < vStart || sec > vEnd - vSpan * 0.05) {
+          const nextStart = Math.max(0, Math.min(total - vSpan, sec - vSpan * 0.15));
+          if (Math.abs(nextStart - vStart) > 0.01) {
+            viewStartRef.current = nextStart;
+            setViewStart(nextStart);
           }
         }
       }
+
       curSecRef.current = sec;
       positionHead(sec);
 
@@ -290,7 +586,7 @@ export function AudioPlayer({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, skipSilence, peaks, drawWave, positionHead, setPlaybackState]);
+  }, [playing, applySilenceTick, drawWave, positionHead, setPlaybackState]);
 
   useEffect(() => {
     if (!skipBadge) return;
@@ -308,33 +604,55 @@ export function AudioPlayer({
     if (!mid) return;
     curSecRef.current = 0;
     durSecRef.current = durationHint || 0;
+    fastingRef.current = false;
+    rangePlayEndRef.current = null;
+    panAutoFollowRef.current = true;
+    zoomRef.current = 1;
+    viewStartRef.current = 0;
+    setFastRateBadge(null);
     setDurSec(durationHint || 0);
     setCurSec(0);
+    setBuffered([]);
     setPlaying(false);
+    setZoom(1);
+    setViewStart(0);
+    setSelectMode(false);
+    setSelection(null);
     setPlaybackState(0, false);
   }, [mid, durationHint, setPlaybackState]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.playbackRate = speed;
+    if (!fastingRef.current) {
+      audio.playbackRate = speed;
+    }
   }, [speed]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = muted;
+  }, [muted]);
 
   useEffect(() => {
     if (!seekRequest) return;
     const audio = audioRef.current;
     if (!audio) return;
+    rangePlayEndRef.current = null;
     const targetSec = Math.max(0, seekRequest.ms / 1000);
     const applySeek = () => {
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        audio.currentTime = Math.min(targetSec, audio.duration);
-      } else {
-        audio.currentTime = targetSec;
-      }
-      curSecRef.current = targetSec;
-      setCurSec(targetSec);
-      positionHead(targetSec);
-      setPlaybackState(targetSec * 1000, !audio.paused);
+      const clamped =
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? Math.min(targetSec, audio.duration)
+          : targetSec;
+      audio.currentTime = clamped;
+      curSecRef.current = clamped;
+      panAutoFollowRef.current = true;
+      ensureViewContains(clamped);
+      setCurSec(clamped);
+      positionHead(clamped);
+      setPlaybackState(clamped * 1000, !audio.paused);
       if (seekRequest.autoplay !== false) {
         void audio.play().catch(() => {});
       }
@@ -344,12 +662,13 @@ export function AudioPlayer({
     } else {
       audio.addEventListener("loadedmetadata", applySeek, { once: true });
     }
-  }, [seekRequest, positionHead, setPlaybackState]);
+  }, [seekRequest, ensureViewContains, positionHead, setPlaybackState]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
+      panAutoFollowRef.current = true;
       void audio.play().catch(() => {
         pushToast("当前无法播放音频，请确认音频文件完整", { tone: "error", durationMs: 3500 });
       });
@@ -362,16 +681,19 @@ export function AudioPlayer({
     (deltaSec: number) => {
       const audio = audioRef.current;
       if (!audio) return;
+      rangePlayEndRef.current = null;
       const maxD = Number.isFinite(audio.duration) ? audio.duration : durSec;
       const next = Math.max(0, Math.min(maxD || 999999, audio.currentTime + deltaSec));
       audio.currentTime = next;
       curSecRef.current = next;
+      panAutoFollowRef.current = true;
+      ensureViewContains(next);
       setCurSec(next);
       positionHead(next);
       setPlaybackState(next * 1000, !audio.paused);
       setKickDir(deltaSec < 0 ? "back" : "fwd");
     },
-    [durSec, positionHead, setPlaybackState],
+    [durSec, ensureViewContains, positionHead, setPlaybackState],
   );
 
   const cycleSpeed = useCallback(() => {
@@ -383,21 +705,45 @@ export function AudioPlayer({
     } catch {}
   }, [speed]);
 
+  const toggleMute = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("audioMuted", next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  const handleSilenceChange = useCallback(
+    (nextMode: SilenceMode) => {
+      setSilenceMode(nextMode);
+      silenceModeRef.current = nextMode;
+      try {
+        localStorage.setItem("silenceMode", nextMode);
+      } catch {}
+      if (nextMode === "off" || nextMode === "skip") {
+        stopFastSilence();
+      }
+      const audio = audioRef.current;
+      if (audio && !audio.paused) {
+        applySilenceTick(audio, audio.currentTime);
+      }
+    },
+    [applySilenceTick, stopFastSilence],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const app = useAppStore.getState();
+      if (isModalOpenNow()) return;
+      const target = e.target as HTMLElement | null;
       if (
-        app.paletteOpen ||
-        app.shortcutsOpen ||
-        app.settingsOpen ||
-        app.sidecarOpen ||
-        app.ambientIntroOpen ||
-        app.vpWizardOpen
+        target?.closest("input, textarea, select, [contenteditable]") ||
+        target?.isContentEditable ||
+        target?.closest("[data-region-handle]")
       ) {
         return;
       }
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable]")) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.code === "Space") {
@@ -410,6 +756,18 @@ export function AudioPlayer({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         seekByDelta(5);
+      } else if (!e.shiftKey && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        seekByDelta(-10);
+      } else if (!e.shiftKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        seekByDelta(10);
+      } else if (e.key === ",") {
+        e.preventDefault();
+        seekByDelta(-1);
+      } else if (e.key === ".") {
+        e.preventDefault();
+        seekByDelta(1);
       } else if (e.key === "[" || e.key === "]") {
         e.preventDefault();
         const idx = SPEEDS.indexOf(speed as (typeof SPEEDS)[number]);
@@ -430,12 +788,28 @@ export function AudioPlayer({
 
   const handleTimeUpdate = () => {
     const audio = audioRef.current;
-    if (!audio || playing || draggingRef.current) return;
-    const sec = audio.currentTime;
-    curSecRef.current = sec;
-    setCurSec(sec);
-    positionHead(sec);
-    setPlaybackState(sec * 1000, false);
+    if (!audio || draggingRef.current || draggingHandleRef.current) return;
+    let sec = audio.currentTime;
+    const rangeEnd = rangePlayEndRef.current;
+    if (rangeEnd !== null && sec >= rangeEnd) {
+      rangePlayEndRef.current = null;
+      audio.pause();
+      audio.currentTime = rangeEnd;
+      curSecRef.current = rangeEnd;
+      setCurSec(rangeEnd);
+      positionHead(rangeEnd);
+      setPlaybackState(rangeEnd * 1000, false);
+      return;
+    }
+    if (!playing) {
+      curSecRef.current = sec;
+      setCurSec(sec);
+      positionHead(sec);
+      setPlaybackState(sec * 1000, false);
+    } else {
+      sec = applySilenceTick(audio, sec);
+      curSecRef.current = sec;
+    }
   };
 
   const computePointerState = (clientX: number) => {
@@ -445,7 +819,10 @@ export function AudioPlayer({
     if (rect.width <= 0) return null;
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const total = Math.max(durSecRef.current, 0.1);
-    const sec = ratio * total;
+    const z = zoomRef.current;
+    const vSpan = total / z;
+    const vStart = z <= 1 ? 0 : Math.max(0, Math.min(total - vSpan, viewStartRef.current));
+    const sec = Math.max(0, Math.min(total, vStart + ratio * vSpan));
     const ms = sec * 1000;
     const xPx = Math.max(0, Math.min(rect.width, ratio * rect.width));
     return { ratio, sec, ms, xPx, flipBelow: rect.top < 72 };
@@ -469,6 +846,7 @@ export function AudioPlayer({
   const applyScrub = (clientX: number, commitAudio: boolean) => {
     const info = computePointerState(clientX);
     if (!info) return;
+    rangePlayEndRef.current = null;
     curSecRef.current = info.sec;
     positionHead(info.sec);
     drawWave(info.sec);
@@ -480,25 +858,80 @@ export function AudioPlayer({
     }
   };
 
+  const previewSelection = useCallback(() => {
+    if (!selection) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const startSec = Math.max(0, selection.start);
+    const endSec = Math.max(startSec + 0.05, selection.end);
+    rangePlayEndRef.current = endSec;
+    audio.currentTime = startSec;
+    curSecRef.current = startSec;
+    panAutoFollowRef.current = true;
+    ensureViewContains(startSec);
+    setCurSec(startSec);
+    positionHead(startSec);
+    setPlaybackState(startSec * 1000, true);
+    void audio.play().catch(() => {
+      rangePlayEndRef.current = null;
+      pushToast("当前无法播放音频，请确认音频文件完整", { tone: "error", durationMs: 3500 });
+    });
+  }, [selection, ensureViewContains, positionHead, pushToast, setPlaybackState]);
+
+  const exportSelection = useCallback(() => {
+    if (!selection) return;
+    const url = `/api/meetings/${encodeURIComponent(mid)}/audio/clip?start=${selection.start.toFixed(3)}&end=${selection.end.toFixed(3)}&fmt=wav`;
+    const link = document.createElement("a");
+    link.href = url;
+    const safeTitle = (meeting?.meta.title || mid).replace(/[\\/:*?"<>|]/g, "_").trim() || mid;
+    link.download = `${safeTitle}_${Math.round(selection.start)}s-${Math.round(selection.end)}s.wav`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, [mid, meeting?.meta.title, selection]);
+
+  const clearSelection = useCallback(() => {
+    rangePlayEndRef.current = null;
+    setSelection(null);
+    setSelectMode(false);
+  }, []);
+
+  const hasValidSelection = Boolean(selection && selection.end - selection.start >= 0.05);
+  const selStart = selection?.start ?? 0;
+  const selEnd = selection?.end ?? 0;
+  const selVisStart = Math.max(clampedViewStart, Math.min(viewEnd, selStart));
+  const selVisEnd = Math.max(clampedViewStart, Math.min(viewEnd, selEnd));
+  const selOverlayLeftPct = ((selVisStart - clampedViewStart) / viewSpan) * 100;
+  const selOverlayWidthPct = Math.max(0, ((selVisEnd - selVisStart) / viewSpan) * 100);
+  const startHandleLeftPct = ((selStart - clampedViewStart) / viewSpan) * 100;
+  const endHandleLeftPct = ((selEnd - clampedViewStart) / viewSpan) * 100;
+  const showStartHandle =
+    selection !== null && selStart >= clampedViewStart - 0.001 && selStart <= viewEnd + 0.001;
+  const showEndHandle = selection !== null && selEnd >= clampedViewStart - 0.001 && selEnd <= viewEnd + 0.001;
+
   return (
     <div className="sticky top-0 z-10 -mx-2 px-2 py-1 bg-[color-mix(in_srgb,var(--bg)_88%,transparent)] backdrop-blur-md">
       <div className="@container rounded-[12px] bg-[var(--surface)] shadow-[var(--shadow-1)] px-3 py-2">
-        {/* biome-ignore lint/a11y/useMediaCaption: local meeting recording audio has interactive transcript */}
         <audio
           ref={audioRef}
           id="audio"
           src={audioSrc}
+          muted={muted}
           preload="metadata"
           onLoadedMetadata={(e) => {
             const d = e.currentTarget.duration;
             if (Number.isFinite(d) && d > 0) setDurSec(d);
+            e.currentTarget.playbackRate = speedRef.current;
+            syncBuffered();
           }}
+          onProgress={syncBuffered}
           onPlay={() => {
             setPlaying(true);
             setPlaybackState((audioRef.current?.currentTime || 0) * 1000, true);
           }}
           onPause={() => {
             setPlaying(false);
+            stopFastSilence();
             const s = audioRef.current?.currentTime || 0;
             curSecRef.current = s;
             setCurSec(s);
@@ -507,6 +940,8 @@ export function AudioPlayer({
           }}
           onEnded={() => {
             setPlaying(false);
+            stopFastSilence();
+            rangePlayEndRef.current = null;
             const s = audioRef.current?.currentTime || 0;
             curSecRef.current = s;
             setCurSec(s);
@@ -515,12 +950,14 @@ export function AudioPlayer({
           }}
           onError={() => {
             setPlaying(false);
+            stopFastSilence();
+            rangePlayEndRef.current = null;
             pushToast("音频加载失败，请确认录音文件存在", { tone: "error", durationMs: 4000 });
           }}
           onTimeUpdate={handleTimeUpdate}
         />
 
-        <div className="flex flex-wrap @[540px]:flex-nowrap items-center gap-1.5">
+        <div className="flex flex-wrap @[680px]:flex-nowrap items-center gap-1.5">
           <button
             type="button"
             onClick={togglePlay}
@@ -543,7 +980,7 @@ export function AudioPlayer({
             type="button"
             onClick={() => seekByDelta(-15)}
             aria-label="后退 15 秒"
-            title="后退 15 秒 (←)"
+            title="后退 15 秒 (← -5s · J -10s · , -1s)"
             className="btn-ghost h-8 px-2 rounded-[8px] text-xs leading-[18px] font-medium num inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <RotateCcw
@@ -559,7 +996,7 @@ export function AudioPlayer({
             type="button"
             onClick={() => seekByDelta(15)}
             aria-label="前进 15 秒"
-            title="前进 15 秒 (→)"
+            title="前进 15 秒 (→ +5s · L +10s · . +1s)"
             className="btn-ghost h-8 px-2 rounded-[8px] text-xs leading-[18px] font-medium num inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
           >
             <span>15s</span>
@@ -574,6 +1011,11 @@ export function AudioPlayer({
           <div className="relative num-mono text-xs leading-[18px] whitespace-nowrap shrink-0 min-w-[98px] text-center px-1">
             <span className="font-medium text-[var(--text)]">{fmtTs(curSec * 1000)}</span>
             <span className="text-[var(--muted)]"> / {fmtTs(durSec * 1000)}</span>
+            {fastRateBadge !== null && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-1.5 py-0.2 text-[11px] font-sans font-medium">
+                静音 ×{fastRateBadge}
+              </span>
+            )}
             {skipBadge && (
               <span className="mn-popover pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 rounded-full bg-[var(--warn-soft)] text-[var(--warn)] px-2.5 py-0.5 text-xs leading-[18px] font-medium font-sans whitespace-nowrap shadow-[var(--shadow-2)]">
                 {skipBadge}
@@ -581,134 +1023,310 @@ export function AudioPlayer({
             )}
           </div>
 
-          <div
-            ref={trackRef}
-            className="group relative order-last @[540px]:order-none basis-full @[540px]:basis-auto @[540px]:flex-1 min-w-[160px] @[540px]:mx-1.5 h-9 cursor-pointer select-none touch-none flex flex-col justify-center"
-            role="slider"
-            aria-label="音频播放进度"
-            aria-valuemin={0}
-            aria-valuemax={Math.round(durSec)}
-            aria-valuenow={Math.round(curSec)}
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowLeft") {
+          <div className="relative order-last @[680px]:order-none basis-full @[680px]:basis-auto @[680px]:flex-1 min-w-[160px] @[680px]:mx-1.5 h-9 select-none touch-none flex flex-col justify-center">
+            <div
+              ref={trackRef}
+              className={`group relative w-full h-9 flex flex-col justify-center ${
+                selectMode ? "cursor-crosshair" : "cursor-pointer"
+              }`}
+              role="slider"
+              aria-label="音频播放进度"
+              aria-valuemin={0}
+              aria-valuemax={Math.round(durSec)}
+              aria-valuenow={Math.round(curSec)}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowLeft") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  seekByDelta(-5);
+                } else if (e.key === "ArrowRight") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  seekByDelta(5);
+                }
+              }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
                 e.preventDefault();
-                seekByDelta(-5);
-              } else if (e.key === "ArrowRight") {
-                e.preventDefault();
-                seekByDelta(5);
-              }
-            }}
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              e.preventDefault();
-              e.currentTarget.setPointerCapture(e.pointerId);
-              draggingRef.current = true;
-              setDragging(true);
-              applyHover(e.clientX);
-              applyScrub(e.clientX, false);
-            }}
-            onPointerMove={(e) => {
-              applyHover(e.clientX);
-              if (draggingRef.current) {
-                applyScrub(e.clientX, false);
-              }
-            }}
-            onPointerUp={(e) => {
-              if (draggingRef.current) {
+                e.currentTarget.setPointerCapture(e.pointerId);
+                draggingRef.current = true;
+                setDragging(true);
+                applyHover(e.clientX);
+                if (e.shiftKey || selectMode) {
+                  dragModeRef.current = "select";
+                  const info = computePointerState(e.clientX);
+                  if (info) {
+                    selAnchorRef.current = info.sec;
+                    setSelection({ start: info.sec, end: info.sec });
+                  }
+                } else {
+                  dragModeRef.current = "scrub";
+                  applyScrub(e.clientX, false);
+                }
+              }}
+              onPointerMove={(e) => {
+                applyHover(e.clientX);
+                if (!draggingRef.current) return;
+                if (dragModeRef.current === "select") {
+                  const info = computePointerState(e.clientX);
+                  if (info) {
+                    const a = selAnchorRef.current;
+                    setSelection({ start: Math.min(a, info.sec), end: Math.max(a, info.sec) });
+                  }
+                } else {
+                  applyScrub(e.clientX, false);
+                }
+              }}
+              onPointerUp={(e) => {
+                const mode = dragModeRef.current;
+                dragModeRef.current = null;
+                if (draggingRef.current) {
+                  draggingRef.current = false;
+                  setDragging(false);
+                  if (mode === "select") {
+                    const info = computePointerState(e.clientX);
+                    const a = selAnchorRef.current;
+                    const endSec = info ? info.sec : a;
+                    const s = Math.min(a, endSec);
+                    const en = Math.max(a, endSec);
+                    if (en - s < 0.05) {
+                      setSelection(null);
+                    } else {
+                      setSelection({ start: s, end: en });
+                    }
+                    return;
+                  }
+                  applyScrub(e.clientX, true);
+                  return;
+                }
+                if (e.shiftKey || selectMode) return;
+                applyScrub(e.clientX, true);
+              }}
+              onPointerCancel={() => {
+                const mode = dragModeRef.current;
+                dragModeRef.current = null;
                 draggingRef.current = false;
                 setDragging(false);
-                applyScrub(e.clientX, true);
-                return;
-              }
-              applyScrub(e.clientX, true);
-            }}
-            onPointerCancel={() => {
-              draggingRef.current = false;
-              setDragging(false);
-              const restoreSec = audioRef.current?.currentTime ?? curSecRef.current;
-              curSecRef.current = restoreSec;
-              setCurSec(restoreSec);
-              positionHead(restoreSec);
-              drawWave(restoreSec);
-            }}
-            onPointerLeave={() => {
-              if (!draggingRef.current) setHoverInfo(null);
-            }}
-          >
-            <div className="relative w-full h-[26px]">
-              <canvas ref={canvasRef} className="w-full h-full block" />
-              <div
-                ref={hoverLineRef}
-                aria-hidden="true"
-                className={`pointer-events-none absolute top-0 bottom-0 left-0 w-px bg-[var(--muted)] transition-opacity duration-150 ${
-                  hoverInfo ? "opacity-55" : "opacity-0"
-                }`}
-              />
-              <div
-                ref={headRef}
-                aria-hidden="true"
-                className="pointer-events-none absolute top-0 bottom-0 left-0 w-[2px] -ml-px bg-[var(--ink)] will-change-transform"
-              >
-                <span
-                  className={`block w-2.5 h-2.5 -ml-1 -mt-1 rounded-full bg-[var(--ink)] shadow-xs transition-transform duration-150 ${
-                    dragging ? "scale-125" : "scale-0 group-hover:scale-100"
+                if (mode === "select") return;
+                const restoreSec = audioRef.current?.currentTime ?? curSecRef.current;
+                curSecRef.current = restoreSec;
+                setCurSec(restoreSec);
+                positionHead(restoreSec);
+                drawWave(restoreSec);
+              }}
+              onPointerLeave={() => {
+                if (!draggingRef.current) setHoverInfo(null);
+              }}
+            >
+              <div className="relative w-full h-[26px]">
+                <canvas ref={canvasRef} className="w-full h-full block" />
+                {bufferedSegments.length > 0 && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-0 right-0 bottom-0 h-[2px] rounded-full bg-[var(--fill)] overflow-hidden"
+                  >
+                    {bufferedSegments.map((seg, i) => (
+                      <i
+                        key={i}
+                        className="absolute top-0 bottom-0 bg-[var(--muted)]/55"
+                        style={{ left: `${seg.leftPct}%`, width: `${seg.widthPct}%` }}
+                      />
+                    ))}
+                  </div>
+                )}
+                <div
+                  ref={hoverLineRef}
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute top-0 bottom-0 left-0 w-px bg-[var(--muted)] transition-opacity duration-150 ${
+                    hoverInfo ? "opacity-55" : "opacity-0"
                   }`}
                 />
+                <div
+                  ref={headRef}
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-0 bottom-0 left-0 w-[2px] -ml-px bg-[var(--ink)] will-change-transform"
+                >
+                  <span
+                    className={`block w-2.5 h-2.5 -ml-1 -mt-1 rounded-full bg-[var(--ink)] shadow-xs transition-transform duration-150 ${
+                      dragging ? "scale-125" : "scale-0 group-hover:scale-100"
+                    }`}
+                  />
+                </div>
               </div>
+
+              {spkSegments.length > 0 && (
+                <div className="relative h-[3px] w-full rounded-full overflow-hidden mt-1 bg-[var(--fill)]">
+                  {spkSegments.map((seg, i) => (
+                    <i
+                      key={i}
+                      className="absolute top-0 bottom-0 opacity-75"
+                      style={{
+                        left: `${seg.leftPct}%`,
+                        width: `${seg.widthPct}%`,
+                        backgroundColor: seg.color,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {hoverInfo && (
+                <div
+                  className={`mn-popover pointer-events-none absolute -translate-x-1/2 rounded-[8px] bg-[var(--ink)] text-[var(--ink-fg)] px-2.5 py-1 text-xs leading-[18px] whitespace-nowrap max-w-[260px] truncate shadow-[var(--shadow-3)] ${
+                    hoverInfo.flipBelow ? "top-10 origin-top" : "-top-8 origin-bottom"
+                  }`}
+                  style={{ left: `${Math.max(8, Math.min(92, hoverInfo.xPct))}%` }}
+                >
+                  <span className="num-mono">{hoverInfo.label}</span>
+                  {hoverInfo.snippet ? ` · ${hoverInfo.snippet}` : ""}
+                </div>
+              )}
             </div>
 
-            {spkSegments.length > 0 && (
-              <div className="relative h-[3px] w-full rounded-full overflow-hidden mt-1 bg-[var(--fill)]">
-                {spkSegments.map((seg, i) => (
-                  <i
-                    key={i}
-                    className="absolute top-0 bottom-0 opacity-75"
+            {selection && (
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-[26px]">
+                {selOverlayWidthPct > 0 && (
+                  <div
+                    className="absolute top-0 bottom-0 bg-[var(--brand-soft)] border-x border-[var(--brand)]/65"
                     style={{
-                      left: `${seg.leftPct}%`,
-                      width: `${seg.widthPct}%`,
-                      backgroundColor: seg.color,
+                      left: `${selOverlayLeftPct}%`,
+                      width: `${selOverlayWidthPct}%`,
                     }}
                   />
-                ))}
-              </div>
-            )}
-
-            {hoverInfo && (
-              <div
-                className={`mn-popover pointer-events-none absolute -translate-x-1/2 rounded-[8px] bg-[var(--ink)] text-[var(--ink-fg)] px-2.5 py-1 text-xs leading-[18px] whitespace-nowrap max-w-[260px] truncate shadow-[var(--shadow-3)] ${
-                  hoverInfo.flipBelow ? "top-10 origin-top" : "-top-8 origin-bottom"
-                }`}
-                style={{ left: `${Math.max(8, Math.min(92, hoverInfo.xPct))}%` }}
-              >
-                <span className="num-mono">{hoverInfo.label}</span>
-                {hoverInfo.snippet ? ` · ${hoverInfo.snippet}` : ""}
+                )}
+                {showStartHandle && (
+                  <div
+                    data-region-handle="start"
+                    role="slider"
+                    aria-label="选区起点"
+                    aria-valuemin={0}
+                    aria-valuemax={Number(selEnd.toFixed(2))}
+                    aria-valuenow={Number(selStart.toFixed(2))}
+                    tabIndex={0}
+                    className="pointer-events-auto absolute top-0 bottom-0 w-2.5 -ml-1.25 cursor-ew-resize flex items-center justify-center focus:outline-none group/h"
+                    style={{ left: `${startHandleLeftPct}%` }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      draggingHandleRef.current = "start";
+                    }}
+                    onPointerMove={(e) => {
+                      if (draggingHandleRef.current !== "start") return;
+                      const info = computePointerState(e.clientX);
+                      if (!info) return;
+                      setSelection((prev) =>
+                        prev
+                          ? { start: Math.max(0, Math.min(prev.end - 0.05, info.sec)), end: prev.end }
+                          : null,
+                      );
+                    }}
+                    onPointerUp={() => {
+                      draggingHandleRef.current = null;
+                    }}
+                    onPointerCancel={() => {
+                      draggingHandleRef.current = null;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const step = e.shiftKey ? 2 : 0.5;
+                      const delta = e.key === "ArrowLeft" ? -step : step;
+                      setSelection((prev) =>
+                        prev
+                          ? {
+                              start: Math.max(0, Math.min(prev.end - 0.05, prev.start + delta)),
+                              end: prev.end,
+                            }
+                          : null,
+                      );
+                    }}
+                  >
+                    <span className="w-1 h-4 rounded-full bg-[var(--brand)] shadow-xs group-focus/h:ring-2 group-focus/h:ring-[var(--brand-ring)]" />
+                  </div>
+                )}
+                {showEndHandle && (
+                  <div
+                    data-region-handle="end"
+                    role="slider"
+                    aria-label="选区终点"
+                    aria-valuemin={Number(selStart.toFixed(2))}
+                    aria-valuemax={Number(totalDur.toFixed(2))}
+                    aria-valuenow={Number(selEnd.toFixed(2))}
+                    tabIndex={0}
+                    className="pointer-events-auto absolute top-0 bottom-0 w-2.5 -ml-1.25 cursor-ew-resize flex items-center justify-center focus:outline-none group/h"
+                    style={{ left: `${endHandleLeftPct}%` }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      draggingHandleRef.current = "end";
+                    }}
+                    onPointerMove={(e) => {
+                      if (draggingHandleRef.current !== "end") return;
+                      const info = computePointerState(e.clientX);
+                      if (!info) return;
+                      setSelection((prev) =>
+                        prev
+                          ? {
+                              start: prev.start,
+                              end: Math.min(totalDur, Math.max(prev.start + 0.05, info.sec)),
+                            }
+                          : null,
+                      );
+                    }}
+                    onPointerUp={() => {
+                      draggingHandleRef.current = null;
+                    }}
+                    onPointerCancel={() => {
+                      draggingHandleRef.current = null;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const step = e.shiftKey ? 2 : 0.5;
+                      const delta = e.key === "ArrowLeft" ? -step : step;
+                      setSelection((prev) =>
+                        prev
+                          ? {
+                              start: prev.start,
+                              end: Math.min(totalDur, Math.max(prev.start + 0.05, prev.end + delta)),
+                            }
+                          : null,
+                      );
+                    }}
+                  >
+                    <span className="w-1 h-4 rounded-full bg-[var(--brand)] shadow-xs group-focus/h:ring-2 group-focus/h:ring-[var(--brand-ring)]" />
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 ml-auto @[540px]:ml-0 shrink-0">
-            {quietSecTotal >= 5 && (
-              <button
-                type="button"
-                onClick={() => {
-                  const next = !skipSilence;
-                  setSkipSilence(next);
-                  try {
-                    localStorage.setItem("skipSilence", next ? "1" : "0");
-                  } catch {}
-                }}
-                aria-pressed={skipSilence}
-                title={`跳过空白停顿（可省约 ${Math.round(quietSecTotal)} 秒）`}
-                className={`rounded-[8px] h-8 px-2.5 text-xs leading-[18px] font-medium whitespace-nowrap shrink-0 cursor-pointer transition-colors duration-150 ${
-                  skipSilence
-                    ? "bg-[var(--fill-strong)] text-[var(--text)]"
-                    : "bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)]"
-                }`}
-              >
-                {skipSilence ? "已跳过停顿" : "跳过停顿"}
-              </button>
-            )}
+          <div className="flex items-center gap-1.5 ml-auto @[680px]:ml-0 shrink-0">
+            <select
+              aria-label="静音处理"
+              value={silenceMode}
+              onChange={(e) => {
+                handleSilenceChange(e.target.value as SilenceMode);
+                e.currentTarget.blur();
+              }}
+              title={
+                quietSecTotal >= 1
+                  ? `静音处理（共约 ${Math.round(quietSecTotal)} 秒停顿）`
+                  : "静音处理：安静片段加速带过或直接跳过"
+              }
+              className="rounded-[8px] h-8 px-2 text-xs leading-[18px] font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)] cursor-pointer transition-colors"
+            >
+              {SIL_OPTS.map(([val, label]) => (
+                <option key={val} value={val}>
+                  {label}
+                </option>
+              ))}
+            </select>
 
             <button
               type="button"
@@ -722,6 +1340,36 @@ export function AudioPlayer({
 
             <button
               type="button"
+              onClick={toggleMute}
+              aria-pressed={muted}
+              aria-label={muted ? "取消静音" : "静音"}
+              title={muted ? "取消静音" : "静音"}
+              className={`w-8 h-8 rounded-[8px] flex items-center justify-center shrink-0 cursor-pointer transition-colors ${
+                muted
+                  ? "bg-[var(--danger-soft)] text-[var(--danger)]"
+                  : "btn-ghost text-[var(--text-2)] hover:text-[var(--text)]"
+              }`}
+            >
+              {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectMode((v) => !v)}
+              aria-pressed={selectMode}
+              title="选区模式：拖动波形截取片段（或按住 Shift 拖动）"
+              className={`rounded-[8px] h-8 px-2 text-xs leading-[18px] font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                selectMode
+                  ? "bg-[var(--brand-soft)] text-[var(--brand)]"
+                  : "bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text-2)] hover:text-[var(--text)]"
+              }`}
+            >
+              <Scissors className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>选区</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => onMarkCurrent(Math.round(curSec * 1000))}
               title="在当前播放时刻打个点"
               aria-label="在当前时刻打点"
@@ -730,6 +1378,82 @@ export function AudioPlayer({
               <Flag className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+
+        <div className="mt-1.5 pt-1.5 border-t border-[var(--line-2)] flex flex-wrap items-center justify-between gap-2 text-xs leading-[18px]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[var(--muted)]">缩放</span>
+            <div className="inline-flex items-center rounded-[7px] bg-[var(--fill)] p-0.5 gap-0.5">
+              {ZOOM_LEVELS.map((z) => (
+                <button
+                  key={z}
+                  type="button"
+                  onClick={() => applyZoom(z)}
+                  aria-pressed={zoom === z}
+                  className={`h-6 px-1.5 rounded-[5px] text-[11px] font-medium num-mono cursor-pointer transition-colors ${
+                    zoom === z
+                      ? "bg-[var(--surface)] text-[var(--text)] shadow-xs"
+                      : "text-[var(--text-2)] hover:text-[var(--text)]"
+                  }`}
+                >
+                  {z}×
+                </button>
+              ))}
+            </div>
+
+            {zoom > 1 && (
+              <div className="flex items-center gap-2 ml-1">
+                <input
+                  type="range"
+                  aria-label="波形平移"
+                  min={0}
+                  max={maxViewStart}
+                  step={Math.max(0.01, viewSpan / 200)}
+                  value={clampedViewStart}
+                  onChange={(e) => {
+                    const nextStart = Number(e.currentTarget.value);
+                    panAutoFollowRef.current =
+                      curSecRef.current >= nextStart && curSecRef.current <= nextStart + viewSpan;
+                    viewStartRef.current = nextStart;
+                    setViewStart(nextStart);
+                  }}
+                  className="w-28 sm:w-36 accent-[var(--ink)] cursor-pointer"
+                />
+                <span className="num-mono text-[11px] text-[var(--muted)] whitespace-nowrap">
+                  {fmtTs(clampedViewStart * 1000)} – {fmtTs(viewEnd * 1000)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {hasValidSelection && (
+            <div className="flex flex-wrap items-center gap-1.5 ml-auto">
+              <span className="num-mono text-[11px] text-[var(--text-2)] px-1">
+                {fmtTs(selStart * 1000)} – {fmtTs(selEnd * 1000)}
+              </span>
+              <button
+                type="button"
+                onClick={previewSelection}
+                className="rounded-[7px] h-6 px-2 text-xs font-medium bg-[var(--brand-soft)] text-[var(--brand)] hover:opacity-90 cursor-pointer transition-opacity"
+              >
+                试听选区
+              </button>
+              <button
+                type="button"
+                onClick={exportSelection}
+                className="rounded-[7px] h-6 px-2 text-xs font-medium bg-[var(--fill)] hover:bg-[var(--fill-hover)] text-[var(--text)] cursor-pointer transition-colors"
+              >
+                导出片段
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="btn-ghost rounded-[7px] h-6 px-2 text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] cursor-pointer"
+              >
+                清除
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
