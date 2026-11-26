@@ -672,8 +672,11 @@ export type UpdatePhase =
   | "available"
   | "not-available"
   | "downloading"
+  | "preparing"
   | "downloaded"
   | "error";
+
+export type UpdateInstallMode = "native" | "mac-zip" | "installer" | "manual";
 
 export interface UpdateInfo {
   version: string;
@@ -681,6 +684,10 @@ export interface UpdateInfo {
   releaseDate?: string;
   releaseNotes?: string;
   releaseUrl?: string;
+  assetName?: string;
+  assetSize?: number;
+  downloadUrl?: string;
+  sha256Url?: string;
 }
 
 export interface UpdateProgress {
@@ -695,6 +702,7 @@ export interface UpdateStatus {
   currentVersion: string;
   autoCheck: boolean;
   canAutoInstall: boolean;
+  installMode: UpdateInstallMode;
   info?: UpdateInfo | null;
   progress?: UpdateProgress | null;
   error?: string;

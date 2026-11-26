@@ -22,6 +22,24 @@ function renderInlines(segments: InlineSegment[], keyPrefix: string, onSeekSec?:
     if (seg.type === "bold") {
       return <strong key={k}>{renderInlines(seg.children, k, onSeekSec)}</strong>;
     }
+    if (seg.type === "link") {
+      return (
+        <a
+          key={k}
+          href={seg.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => {
+            if (window.desktopAPI?.openExternal) {
+              e.preventDefault();
+              void window.desktopAPI.openExternal(seg.href);
+            }
+          }}
+        >
+          {seg.label}
+        </a>
+      );
+    }
     if (seg.type === "ts") {
       if (!onSeekSec) {
         return (

@@ -56,6 +56,7 @@ if (!gotLock) {
 
   let shortcuts: ShortcutController;
   let trayRef: TrayController | null = null;
+  let readyToQuit = false;
 
   const updater = new AppUpdaterService({
     autoCheck: savedCfg.autoCheckUpdates ?? true,
@@ -65,9 +66,24 @@ if (!gotLock) {
       }
     },
     onBeforeInstall: async () => {
+      if (recorderState.active) {
+        const res = await dialog.showMessageBox({
+          type: "warning",
+          title: "正在录音中",
+          message: "当前会议还在录音，现在安装更新会中断录制并重启应用。",
+          buttons: ["继续录音", "停止并安装更新"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (res.response !== 1) {
+          return false;
+        }
+      }
       isQuitting = true;
       await sidecar.stop();
       await bridge.stop();
+      readyToQuit = true;
+      return true;
     },
     onNotifyTray: () => trayRef?.updateUI(),
   });
@@ -182,6 +198,7 @@ if (!gotLock) {
     void (async () => {
       await sidecar.stop();
       await bridge.stop();
+      readyToQuit = true;
       app.exit(0);
     })();
   };
@@ -260,7 +277,7 @@ if (!gotLock) {
   });
 
   app.on("before-quit", (e) => {
-    if (isQuitting && sidecar.getStatus().phase === "stopped") return;
+    if (readyToQuit) return;
     e.preventDefault();
     if (isQuitting) return;
 

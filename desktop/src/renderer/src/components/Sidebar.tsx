@@ -231,7 +231,11 @@ export function Sidebar() {
   const themeLabel =
     themeMode === "auto" ? "主题：跟随系统" : themeMode === "light" ? "主题：浅色" : "主题：深色";
   const hasUpdateBanner = Boolean(
-    updateStatus && (updateStatus.status === "available" || updateStatus.status === "downloaded"),
+    updateStatus &&
+      (updateStatus.status === "available" ||
+        updateStatus.status === "downloading" ||
+        updateStatus.status === "preparing" ||
+        updateStatus.status === "downloaded"),
   );
 
   return (
@@ -538,8 +542,14 @@ export function Sidebar() {
                     <Download className="w-3.5 h-3.5 shrink-0 text-[var(--text-2)]" aria-hidden="true" />
                     <span className="truncate font-medium">
                       {updateStatus.status === "downloaded"
-                        ? "新版本已就绪 · 点击安装"
-                        : `发现新版本 v${updateStatus.info?.version ?? ""}`}
+                        ? updateStatus.canAutoInstall
+                          ? "新版本已就绪 · 点击更新"
+                          : "安装包已下载 · 点击打开"
+                        : updateStatus.status === "preparing"
+                          ? "正在准备更新…"
+                          : updateStatus.status === "downloading"
+                            ? `正在下载 v${updateStatus.info?.version ?? ""} ${updateStatus.progress?.percent ?? 0}%`
+                            : `发现新版本 v${updateStatus.info?.version ?? ""}`}
                     </span>
                   </span>
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--ink)] shrink-0" aria-hidden="true" />

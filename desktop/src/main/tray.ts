@@ -175,6 +175,7 @@ export class TrayController {
       Boolean(amb?.conv),
       detected?.id ?? null,
       upd?.status ?? null,
+      upd?.canAutoInstall ?? null,
       upd?.info?.version ?? null,
     ]);
     if (sig === this.lastMenuSig) return;
@@ -283,24 +284,40 @@ export class TrayController {
       ...(upd?.status === "downloaded" && this.deps.onInstallUpdate
         ? [
             {
-              label: `安装新版本 v${upd.info?.version ?? ""} 并重启`,
+              label: upd.canAutoInstall
+                ? `安装新版本 v${upd.info?.version ?? ""} 并重启`
+                : `打开新版本安装包 v${upd.info?.version ?? ""}`,
               click: () => this.deps.onInstallUpdate?.(),
             } satisfies MenuItemConstructorOptions,
           ]
-        : this.deps.onCheckUpdates
+        : upd?.status === "downloading"
           ? [
               {
-                label:
-                  upd?.status === "available"
-                    ? `发现新版本 v${upd.info?.version ?? ""}…`
-                    : upd?.status === "checking"
-                      ? "正在检查更新…"
-                      : "检查更新…",
-                enabled: upd?.status !== "checking",
-                click: () => this.deps.onCheckUpdates?.(),
+                label: "正在下载更新…",
+                enabled: false,
               } satisfies MenuItemConstructorOptions,
             ]
-          : []),
+          : upd?.status === "preparing"
+            ? [
+                {
+                  label: "正在准备更新…",
+                  enabled: false,
+                } satisfies MenuItemConstructorOptions,
+              ]
+            : this.deps.onCheckUpdates
+              ? [
+                  {
+                    label:
+                      upd?.status === "available"
+                        ? `发现新版本 v${upd.info?.version ?? ""}…`
+                        : upd?.status === "checking"
+                          ? "正在检查更新…"
+                          : "检查更新…",
+                    enabled: upd?.status !== "checking",
+                    click: () => this.deps.onCheckUpdates?.(),
+                  } satisfies MenuItemConstructorOptions,
+                ]
+              : []),
       { type: "separator" },
       { label: "退出会议记录", accelerator: "CommandOrControl+Q", click: () => this.deps.onQuit() },
     );

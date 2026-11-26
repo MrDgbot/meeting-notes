@@ -14,6 +14,7 @@ export type InlineSegment =
   | { type: "text"; value: string }
   | { type: "bold"; children: InlineSegment[] }
   | { type: "code"; value: string }
+  | { type: "link"; label: string; href: string }
   | { type: "ts"; label: string };
 
 export interface ListItemNode {
@@ -71,12 +72,61 @@ function pushFormattedText(text: string, out: InlineSegment[]): void {
   for (const bm of text.matchAll(/\*\*(.+?)\*\*/g)) {
     const idx = bm.index ?? 0;
     if (idx > pos) {
-      pushTimestampText(text.slice(pos, idx), out);
+      pushLinkAndTimestampText(text.slice(pos, idx), out);
     }
     const inner: InlineSegment[] = [];
-    pushTimestampText(bm[1] ?? "", inner);
+    pushLinkAndTimestampText(bm[1] ?? "", inner);
     out.push({ type: "bold", children: inner });
     pos = idx + bm[0].length;
+  }
+  if (pos < text.length) {
+    pushLinkAndTimestampText(text.slice(pos), out);
+  }
+}
+
+const LINK_OR_URL_RE =
+  /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'*+,;=%]+)/g;
+const TRAILING_URL_PUNCT_RE = /[.,;:!?]+$/;
+
+function isSafeHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function pushLinkAndTimestampText(text: string, out: InlineSegment[]): void {
+  let pos = 0;
+  for (const lm of text.matchAll(LINK_OR_URL_RE)) {
+    const idx = lm.index ?? 0;
+    if (idx > pos) {
+      pushTimestampText(text.slice(pos, idx), out);
+    }
+    const mdLabel = lm[1];
+    const mdHref = lm[2];
+    const bareRaw = lm[3];
+    if (mdLabel !== undefined && mdHref !== undefined) {
+      if (isSafeHttpUrl(mdHref)) {
+        out.push({ type: "link", label: mdLabel, href: mdHref });
+      } else {
+        pushTimestampText(lm[0], out);
+      }
+      pos = idx + lm[0].length;
+    } else if (bareRaw !== undefined) {
+      const trimmed = bareRaw.replace(TRAILING_URL_PUNCT_RE, "");
+      const suffix = bareRaw.slice(trimmed.length);
+      if (trimmed && isSafeHttpUrl(trimmed)) {
+        out.push({ type: "link", label: trimmed, href: trimmed });
+        if (suffix) {
+          pushTimestampText(suffix, out);
+        }
+      } else {
+        pushTimestampText(bareRaw, out);
+      }
+      pos = idx + bareRaw.length;
+    }
   }
   if (pos < text.length) {
     pushTimestampText(text.slice(pos), out);

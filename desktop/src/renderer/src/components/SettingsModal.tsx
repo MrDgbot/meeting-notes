@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MarkdownView } from "@/components/MarkdownView";
 import { CopyButton, Disclosure, InlineConfirm, ModalShell } from "@/components/MotionPrimitives";
 import { api } from "@/lib/api";
 import { normalizeSettingsTab, type SettingsTab, useAppStore } from "@/stores/appStore";
@@ -1526,18 +1527,22 @@ export function SettingsModal() {
                       <div className="text-sm leading-[22px] font-semibold text-[var(--text)]">软件更新</div>
                       <div className="text-[13px] leading-[20px] text-[var(--text-2)] mt-0.5">
                         {updateStatus?.status === "downloaded"
-                          ? `新版本 v${updateStatus.info?.version ?? ""} 已下载完成，重启即可安装`
-                          : updateStatus?.status === "available"
-                            ? `发现新版本 v${updateStatus.info?.version ?? ""}`
-                            : updateStatus?.status === "downloading"
-                              ? `正在下载更新… ${updateStatus.progress?.percent ?? 0}%`
-                              : updateStatus?.status === "checking"
-                                ? "正在检查是否有新版本…"
-                                : updateStatus?.status === "not-available"
-                                  ? "当前已是最新版本"
-                                  : updateStatus?.status === "error"
-                                    ? "检查更新时网络异常"
-                                    : "保持桌面客户端与本地转写链路处于最新版本"}
+                          ? updateStatus.canAutoInstall
+                            ? `新版本 v${updateStatus.info?.version ?? ""} 已就绪，重启即可自动替换更新`
+                            : `安装包${updateStatus.info?.assetName ? ` ${updateStatus.info.assetName}` : ""} 已下载完成，打开即可安装`
+                          : updateStatus?.status === "preparing"
+                            ? "正在校验完整性并解压更新包…"
+                            : updateStatus?.status === "available"
+                              ? `发现新版本 v${updateStatus.info?.version ?? ""}`
+                              : updateStatus?.status === "downloading"
+                                ? `正在下载更新… ${updateStatus.progress?.percent ?? 0}%`
+                                : updateStatus?.status === "checking"
+                                  ? "正在检查是否有新版本…"
+                                  : updateStatus?.status === "not-available"
+                                    ? "当前已是最新版本"
+                                    : updateStatus?.status === "error"
+                                      ? "更新过程出现异常"
+                                      : "保持桌面客户端与本地转写链路处于最新版本"}
                       </div>
                     </div>
 
@@ -1545,7 +1550,9 @@ export function SettingsModal() {
                       <button
                         type="button"
                         disabled={
-                          updateStatus?.status === "checking" || updateStatus?.status === "downloading"
+                          updateStatus?.status === "checking" ||
+                          updateStatus?.status === "downloading" ||
+                          updateStatus?.status === "preparing"
                         }
                         onClick={() => void window.desktopAPI?.checkForUpdates()}
                         className={`${BTN_SECONDARY_SM} disabled:opacity-60`}
@@ -1564,7 +1571,24 @@ export function SettingsModal() {
                           className={BTN_BRAND_SM}
                         >
                           <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>{updateStatus.canAutoInstall ? "立即下载更新" : "前往下载新版"}</span>
+                          <span>
+                            {updateStatus.canAutoInstall
+                              ? "立即下载更新"
+                              : updateStatus.installMode === "installer"
+                                ? "下载安装包"
+                                : "前往下载新版"}
+                          </span>
+                        </button>
+                      )}
+
+                      {updateStatus?.status === "error" && updateStatus.info?.downloadUrl && (
+                        <button
+                          type="button"
+                          onClick={() => void window.desktopAPI?.downloadUpdate()}
+                          className={BTN_BRAND_SM}
+                        >
+                          <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>重试下载</span>
                         </button>
                       )}
 
@@ -1574,28 +1598,38 @@ export function SettingsModal() {
                           onClick={() => void window.desktopAPI?.installUpdate()}
                           className={BTN_BRAND_SM}
                         >
-                          <span>重启并安装更新</span>
+                          <span>{updateStatus.canAutoInstall ? "重启并安装更新" : "打开安装包"}</span>
                         </button>
                       )}
                     </div>
                   </div>
 
-                  {updateStatus?.status === "downloading" && updateStatus.progress && (
-                    <div className="space-y-1.5">
-                      <div className="w-full h-2 rounded-full bg-[var(--fill)] overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-[var(--ink)] transition-[width] duration-200"
-                          style={{ width: `${updateStatus.progress.percent}%` }}
-                        />
+                  {(updateStatus?.status === "downloading" || updateStatus?.status === "preparing") &&
+                    updateStatus.progress && (
+                      <div className="space-y-1.5">
+                        <div className="w-full h-2 rounded-full bg-[var(--fill)] overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-[var(--ink)] transition-[width] duration-200"
+                            style={{ width: `${updateStatus.progress.percent}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs leading-[18px] text-[var(--muted)] num">
+                          <span>
+                            {updateStatus.progress.percent}%
+                            {updateStatus.progress.total > 0
+                              ? ` · ${(updateStatus.progress.transferred / (1024 * 1024)).toFixed(1)} / ${(updateStatus.progress.total / (1024 * 1024)).toFixed(1)} MB`
+                              : ""}
+                          </span>
+                          <span>
+                            {updateStatus.status === "preparing"
+                              ? "校验解压中…"
+                              : updateStatus.progress.bytesPerSecond >= 1024 * 1024
+                                ? `${(updateStatus.progress.bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`
+                                : `${Math.max(0, Math.round(updateStatus.progress.bytesPerSecond / 1024))} KB/s`}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center justify-between text-xs leading-[18px] text-[var(--muted)] num">
-                        <span>{updateStatus.progress.percent}%</span>
-                        <span>
-                          {Math.max(0, Math.round(updateStatus.progress.bytesPerSecond / 1024))} KB/s
-                        </span>
-                      </div>
-                    </div>
-                  )}
+                    )}
 
                   {updateStatus?.status === "error" && updateStatus.error && (
                     <div className="rounded-[10px] bg-[var(--danger-soft)] text-[var(--danger)] px-3.5 py-2.5 text-[13px] leading-[20px] break-words">
@@ -1604,8 +1638,8 @@ export function SettingsModal() {
                   )}
 
                   {updateStatus?.info?.releaseNotes && (
-                    <div className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line-2)] p-3.5 max-h-48 overflow-y-auto text-[13px] leading-[20px] whitespace-pre-wrap text-[var(--text-body)]">
-                      {updateStatus.info.releaseNotes}
+                    <div className="rounded-[12px] bg-[var(--surface-2)] border border-[var(--line-2)] px-4 py-3 max-h-64 overflow-y-auto">
+                      <MarkdownView markdown={updateStatus.info.releaseNotes} className="md-prose-compact" />
                     </div>
                   )}
 

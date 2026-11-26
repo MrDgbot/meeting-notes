@@ -71,4 +71,25 @@ describe("shared markdown todo parity with Python relations.py", () => {
       expect(list.items[0]?.todoDone).toBe(false);
     }
   });
+
+  it("parses markdown links and bare URLs safely while ignoring code spans", () => {
+    const segs = parseInlineSegments(
+      "查看 [更新日志](https://github.com/MrDgbot/meeting-notes/blob/v0.1.1/CHANGELOG.md)，或访问 https://github.com/MrDgbot/meeting-notes。忽略 `[文档](https://example.com)` 与 [bad](javascript:alert(1))",
+    );
+    const links = segs.filter((s) => s.type === "link");
+    expect(links).toEqual([
+      {
+        type: "link",
+        label: "更新日志",
+        href: "https://github.com/MrDgbot/meeting-notes/blob/v0.1.1/CHANGELOG.md",
+      },
+      {
+        type: "link",
+        label: "https://github.com/MrDgbot/meeting-notes",
+        href: "https://github.com/MrDgbot/meeting-notes",
+      },
+    ]);
+    const codeVals = segs.filter((s) => s.type === "code").map((s) => s.value);
+    expect(codeVals).toEqual(["[文档](https://example.com)"]);
+  });
 });

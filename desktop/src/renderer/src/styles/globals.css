@@ -903,6 +903,75 @@ select {
     color: var(--text-body);
   }
 
+  .md-prose.md-prose-compact {
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .md-prose.md-prose-compact h1 {
+    font-size: 16px;
+    line-height: 24px;
+    margin: 0 0 8px;
+  }
+
+  .md-prose.md-prose-compact h2 {
+    font-size: 14.5px;
+    line-height: 22px;
+    margin: 14px 0 6px;
+  }
+
+  .md-prose.md-prose-compact h3 {
+    font-size: 13.5px;
+    line-height: 21px;
+    margin: 12px 0 4px;
+  }
+
+  .md-prose.md-prose-compact h4 {
+    font-size: 13px;
+    line-height: 20px;
+    margin: 10px 0 4px;
+  }
+
+  .md-prose.md-prose-compact p {
+    margin: 6px 0;
+  }
+
+  .md-prose.md-prose-compact ul,
+  .md-prose.md-prose-compact ol {
+    margin: 4px 0;
+    padding-left: 18px;
+  }
+
+  .md-prose.md-prose-compact li + li {
+    margin-top: 3px;
+  }
+
+  .md-prose.md-prose-compact hr {
+    margin: 12px 0;
+  }
+
+  .md-prose.md-prose-compact code {
+    font-size: 12px;
+    padding: 1px 4px;
+  }
+
+  .md-prose.md-prose-compact pre {
+    padding: 10px 12px;
+    font-size: 12px;
+    border-radius: 8px;
+    margin: 8px 0;
+  }
+
+  .md-prose.md-prose-compact table {
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .md-prose.md-prose-compact th,
+  .md-prose.md-prose-compact td {
+    padding: 6px 10px;
+  }
+
   .md-prose tbody tr:last-child td {
     border-bottom: none;
   }
